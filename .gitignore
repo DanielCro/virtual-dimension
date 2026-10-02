@@ -1,0 +1,12 @@
+# Build output
+/build/
+/out/
+
+# Original CVS repository (history is imported into git)
+/cvs-archive/
+
+# IDE / tooling
+.vs/
+*.user
+.cache/
+compile_commands.json
