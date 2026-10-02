@@ -1,19 +1,19 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
@@ -43,7 +43,7 @@ bool BackgroundDisplayMode::ChooseOptions(HWND /*hWnd*/)
 
 
 
-PictureBackgroundDisplayMode::PictureBackgroundDisplayMode(): m_height(0), m_width(0)
+PictureBackgroundDisplayMode::PictureBackgroundDisplayMode(): m_selDeskBkPicture(NULL), m_deskBkPicture(NULL), m_picDC(NULL), m_height(0), m_width(0)
 {
    Settings settings;
 
@@ -54,8 +54,10 @@ PictureBackgroundDisplayMode::~PictureBackgroundDisplayMode()
 {
    Settings settings;
 
-   DeleteObject(m_deskBkPicture);
-   DeleteObject(m_selDeskBkPicture);
+   if (m_deskBkPicture)
+      DeleteObject(m_deskBkPicture);
+   if (m_selDeskBkPicture)
+      DeleteObject(m_selDeskBkPicture);
 
    settings.SaveSetting(Settings::BackgroundPicture, m_bkgrndPictureFile);
 }
@@ -67,12 +69,17 @@ void PictureBackgroundDisplayMode::BeginPainting(HDC hdc)
 
 void PictureBackgroundDisplayMode::PaintDesktop(HDC hdc, LPRECT rect, bool active)
 {
-   if (active)
-      SelectObject(m_picDC, m_selDeskBkPicture);
-   else
-      SelectObject(m_picDC, m_deskBkPicture);
+   HBITMAP picture = active ? m_selDeskBkPicture : m_deskBkPicture;
 
-   BitBlt(hdc, rect->left, rect->top, rect->right-rect->left, rect->bottom-rect->top, 
+   if (picture == NULL)
+   {
+      FillRect(hdc, rect, GetSysColorBrush(active ? COLOR_WINDOW : COLOR_BTNFACE));
+      return;
+   }
+
+   SelectObject(m_picDC, picture);
+
+   BitBlt(hdc, rect->left, rect->top, rect->right-rect->left, rect->bottom-rect->top,
           m_picDC, 0, 0, SRCCOPY);
 }
 
@@ -96,16 +103,16 @@ bool PictureBackgroundDisplayMode::ChooseOptions(HWND hWnd)
 {
    OPENFILENAME ofn;
    BOOL res;
-	String filter;
+   String filter;
 
    ZeroMemory(&ofn, sizeof(OPENFILENAME));
    ofn.lStructSize = sizeof(OPENFILENAME);
    ofn.hwndOwner = hWnd;
    ofn.lpstrFile = m_bkgrndPictureFile;
    ofn.nMaxFile = MAX_PATH;
-	filter = Locale::GetInstance().GetString(IDS_PICTUREFILTER);
-	filter.Replace('|', 0);
-   ofn.lpstrFilter = filter;
+   filter = Locale::GetInstance().GetString(IDS_PICTUREFILTER);
+   std::replace(filter.begin(), filter.end(), L'|', L'\0');
+   ofn.lpstrFilter = filter.c_str();
    ofn.nFilterIndex = 1;
    ofn.lpstrFileTitle = NULL;
    ofn.nMaxFileTitle = 0;
@@ -115,62 +122,49 @@ bool PictureBackgroundDisplayMode::ChooseOptions(HWND hWnd)
 
    res = GetOpenFileName(&ofn);
    if (res)
-   {
-      DeleteObject(m_selDeskBkPicture);
-      DeleteObject(m_deskBkPicture);
       UpdatePictureObjects();
-   }
 
    return res ? true : false;
 }
 
 void PictureBackgroundDisplayMode::UpdatePictureObjects()
 {
-   IPicture * image;
+   if (m_deskBkPicture)
+      DeleteObject(m_deskBkPicture);
+   if (m_selDeskBkPicture)
+      DeleteObject(m_selDeskBkPicture);
+   m_deskBkPicture = m_selDeskBkPicture = NULL;
 
-   //Open the picture
-   image = PlatformHelper::OpenImage(m_bkgrndPictureFile);
+   if (m_width <= 0 || m_height <= 0)
+      return;
 
-   //If succesful, get the bitmap handles
-   if (image)
-   {
-      HBITMAP bmp;
-      HDC memDC;
-      HDC picDC;
-      RECT rect;
-      HDC winDC;
+   //Deselected picture
+   m_deskBkPicture = PlatformHelper::LoadImageFile(m_bkgrndPictureFile, m_width, m_height);
+   if (!m_deskBkPicture)
+      return;
 
-      //Deselected picture
-      image->get_Handle((OLE_HANDLE *)&bmp);
-      m_deskBkPicture = (HBITMAP)CopyImage(bmp, IMAGE_BITMAP, m_width, m_height, 0);
-      image->Release();
-      DeleteObject(bmp);      //maybe this is not usefull
+   //Selected picture: the same, lighter
+   HDC winDC = GetWindowDC(vdWindow);
+   HDC memDC = CreateCompatibleDC(winDC);
+   HDC picDC = CreateCompatibleDC(winDC);
+   RECT rect;
 
-      //Selected picture
-      winDC = GetWindowDC(vdWindow);
-      memDC = CreateCompatibleDC(winDC);
-      m_selDeskBkPicture = CreateCompatibleBitmap(winDC, m_width, m_height);
-      SelectObject(memDC, m_selDeskBkPicture);
-//ReleaseDC(vdWindow, winDC);
+   m_selDeskBkPicture = CreateCompatibleBitmap(winDC, m_width, m_height);
+   HGDIOBJ oldMemBmp = SelectObject(memDC, m_selDeskBkPicture);
+   HGDIOBJ oldPicBmp = SelectObject(picDC, m_deskBkPicture);
 
-      picDC = CreateCompatibleDC(memDC);
-      SelectObject(picDC, m_deskBkPicture);
+   rect.left = rect.top = 0;
+   rect.right = m_width;
+   rect.bottom = m_height;
+   FillRect(memDC, &rect, (HBRUSH)GetStockObject(WHITE_BRUSH));
+   PlatformHelper::AlphaBlend(memDC, 0, 0, picDC, 0, 0, m_width, m_height, 128);
 
-      rect.left = rect.top = 0;
-      rect.right = m_width;
-      rect.bottom = m_height;
-      FillRect(memDC, &rect, (HBRUSH)GetStockObject(WHITE_BRUSH));
-
-      PlatformHelper::AlphaBlend(memDC, 0, 0, picDC, 0, 0, m_width, m_height, 128);
-
-      DeleteDC(picDC);
-      DeleteDC(memDC);
-   }
-   else
-      m_deskBkPicture = m_selDeskBkPicture = NULL;
+   SelectObject(picDC, oldPicBmp);
+   SelectObject(memDC, oldMemBmp);
+   DeleteDC(picDC);
+   DeleteDC(memDC);
+   ReleaseDC(vdWindow, winDC);
 }
-
-
 
 PlainColorBackgroundDisplayMode::PlainColorBackgroundDisplayMode()
 {

@@ -48,7 +48,6 @@ public:
    static DECLARE_SETTING(CloseToTray, bool);
    static DECLARE_SETTING(AutoSwitchDesktop, bool);
    static DECLARE_SETTING(AllWindowsInTaskList, bool);
-   static DECLARE_SETTING(IntegrateWithShell, bool);
    static DECLARE_SETTING(SwitchToNextDesktopHotkey, int);
    static DECLARE_SETTING(SwitchToPreviousDesktopHotkey, int);
    static DECLARE_SETTING(SwitchToTopDesktopHotkey, int);
@@ -65,7 +64,7 @@ public:
    static DECLARE_SETTING(TogglePreviewWindowHotkey, int);
    static DECLARE_SETTING(DisplayMode, int);
    static DECLARE_SETTING(BackgroundColor, COLORREF);
-   static DECLARE_SETTING(BackgroundPicture, LPTSTR);
+   static DECLARE_SETTING(BackgroundPicture, LPCWSTR);
    static DECLARE_SETTING(DesktopNameOSD, bool);
    static DECLARE_SETTING(PreviewWindowFont, LOGFONT);
    static DECLARE_SETTING(PreviewWindowFontColor, COLORREF);
@@ -84,37 +83,33 @@ public:
    static DECLARE_SETTING(WarpRequiredVKey, int);
    static DECLARE_SETTING(WarpInvertMousePos, bool);
    static DECLARE_SETTING(DefaultHidingMethod, int);
-   static DECLARE_SETTING(LanguageCode,int);
 
    // Other settings
-   Config::Group * GetShellIntegrationExceptions() { return GetSubGroup(regSubKeyDisableShellIntegration); }
    Config::Group * GetHidingMethodExceptions()     { return GetSubGroup(regSubKeyHidingMethods); }
 
    bool LoadStartWithWindows();
    void SaveStartWithWindows(bool start);
-   bool LoadDisableShellIntegration(const char * windowclass);
-   void SaveDisableShellIntegration(const char * windowclass, bool enable);
-   int LoadHidingMethod(const char * windowclass);
-   void SaveHidingMethod(const char * windowclass, int method);
+   int LoadHidingMethod(LPCWSTR program);
+   void SaveHidingMethod(LPCWSTR program, int method);
 
    class SubkeyList: public Config::RegistryGroup
    {
    public:
-      SubkeyList(Settings * settings, const char regKey[]);
-      SubkeyList(Settings * settings, const char regKey[], int index);
-      SubkeyList(Settings * settings, const char regKey[], char * name, bool create=true);
+      SubkeyList(Settings * settings, LPCWSTR regKey);
+      SubkeyList(Settings * settings, LPCWSTR regKey, int index);
+      SubkeyList(Settings * settings, LPCWSTR regKey, LPCWSTR name, bool create=true);
 
       virtual bool Open(int index);
-      virtual bool Open(const char * name, bool create=true);
+      virtual bool Open(LPCWSTR name, bool create=true);
 
       bool IsValid();
       void Destroy();
 
-      char * GetName(char * buffer, unsigned int length);
-      bool Rename(char * buffer);
+      LPWSTR GetName(LPWSTR buffer, unsigned int length);
+      bool Rename(LPCWSTR name);
 
    protected:
-      char m_name[MAX_NAME_LENGTH];
+      wchar_t m_name[MAX_NAME_LENGTH];
 
       Config::RegistryGroup m_group;
    };
@@ -124,15 +119,15 @@ public:
    public:
       Desktop(Settings * settings): SubkeyList(settings, regKeyDesktops)                     {}
       Desktop(Settings * settings, int index): SubkeyList(settings, regKeyDesktops, index)   {}
-      Desktop(Settings * settings, char * name): SubkeyList(settings, regKeyDesktops, name)  {}
+      Desktop(Settings * settings, LPCWSTR name): SubkeyList(settings, regKeyDesktops, name) {}
 
       static DECLARE_SETTING(DeskIndex, int);
-      static DECLARE_SETTING(DeskWallpaper, LPTSTR);
+      static DECLARE_SETTING(DeskWallpaper, LPCWSTR);
       static DECLARE_SETTING(DeskHotkey, int);
       static DECLARE_SETTING(BackgroundColor, COLORREF);
 
    protected:
-      static const char regKeyDesktops[];
+      static const wchar_t regKeyDesktops[];
    };
 
    class Window: public SubkeyList
@@ -140,10 +135,10 @@ public:
    public:
       Window(Settings * settings): SubkeyList(settings, regKeyWindows)                       {}
       Window(Settings * settings, int index): SubkeyList(settings, regKeyWindows, index) {}
-      Window(Settings * settings, char * name, bool create=false): SubkeyList(settings, regKeyWindows, name, create)  {}
+      Window(Settings * settings, LPCWSTR name, bool create=false): SubkeyList(settings, regKeyWindows, name, create) {}
 
       bool OpenDefault()                                       { return Open(NULL); }
-      virtual bool Open(const char * name, bool create=false)  { return SubkeyList::Open(name, create); }
+      virtual bool Open(LPCWSTR name, bool create=false)       { return SubkeyList::Open(name, create); }
 
       static DECLARE_SETTING(AlwaysOnTop, bool);
       static DECLARE_SETTING(OnAllDesktops, bool);
@@ -158,21 +153,15 @@ public:
       static DECLARE_SETTING(DesktopIndex, int);
 
    protected:
-      static const char regKeyWindows[];
+      static const wchar_t regKeyWindows[];
    };
 
 protected:
-   static const char regKeyName[];
-   static const char regKeyWindowsStartup[];
+   static const wchar_t regKeyName[];
+   static const wchar_t regKeyWindowsStartup[];
 
-   static const char regSubKeyDisableShellIntegration[];
-   static const char regSubKeyHidingMethods[];
-   static const char regValStartWithWindows[];
-
-   static DWORD LoadDWord(HKEY regKey, bool keyOpened, const char * entry, DWORD defVal);
-   static void SaveDWord(HKEY regKey, bool keyOpened, const char * entry, DWORD value);
-   static bool LoadBinary(HKEY regKey, bool keyOpened, const char * entry, LPBYTE buffer, DWORD length);
-   static void SaveBinary(HKEY regKey, bool keyOpened, const char * entry, LPBYTE buffer, DWORD length);
+   static const wchar_t regSubKeyHidingMethods[];
+   static const wchar_t regValStartWithWindows[];
 
    friend class Settings::Desktop;
    friend class Settings::Window;

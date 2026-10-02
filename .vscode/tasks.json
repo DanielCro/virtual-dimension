@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build (Debug)",
+      "type": "shell",
+      "command": "${workspaceFolder}/build.cmd",
+      "args": ["debug"],
+      "options": { "shell": { "executable": "cmd.exe", "args": ["/d", "/c"] } },
+      "problemMatcher": "$msCompile",
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "Build (Release)",
+      "type": "shell",
+      "command": "${workspaceFolder}/build.cmd",
+      "args": ["release"],
+      "options": { "shell": { "executable": "cmd.exe", "args": ["/d", "/c"] } },
+      "problemMatcher": "$msCompile",
+      "group": "build"
+    },
+    {
+      "label": "Rebuild (Debug)",
+      "type": "shell",
+      "command": "${workspaceFolder}/build.cmd",
+      "args": ["debug", "clean"],
+      "options": { "shell": { "executable": "cmd.exe", "args": ["/d", "/c"] } },
+      "problemMatcher": "$msCompile",
+      "group": "build"
+    }
+  ]
+}

@@ -1,23 +1,23 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
- 
+
 #include "stdafx.h"
 #include "BalloonNotif.h"
 #include "VirtualDimension.h"
@@ -48,15 +48,15 @@ BalloonNotification::BalloonNotification(void): m_tooltipWndProc(NULL), m_toolti
 
 		// Add some storage space
 		m_tooltipWndExtra = cls.cbWndExtra;
-		cls.cbWndExtra += 2*sizeof(int);
+		cls.cbWndExtra += 2*sizeof(LONG_PTR);
 
 		// Register the new class
 		cls.hInstance = (HINSTANCE)GetModuleHandle(NULL);
-		cls.lpszClassName = "Balloon Notification Tooltips";
+		cls.lpszClassName = L"Balloon Notification Tooltips";
 		//cls.style |= CS_GLOBALCLASS;
 		m_tooltipClass = MAKEINTATOM(RegisterClassEx(&cls));
 	}
-   
+
    if (m_tooltipClass == NULL)
    {
       // Failed to get class info -> use standard class
@@ -69,8 +69,8 @@ BalloonNotification::~BalloonNotification(void)
 	UnregisterClass(m_tooltipClass, GetModuleHandle(NULL));
 }
 
-BalloonNotification::Message BalloonNotification::Add(LPCTSTR text, LPCTSTR title, int icon, 
-                                                      BalloonNotification::ClickCb cb, int data, DWORD timeout)
+BalloonNotification::Message BalloonNotification::Add(LPCWSTR text, LPCWSTR title, INT_PTR icon,
+                                                      BalloonNotification::ClickCb cb, LPARAM data, DWORD timeout)
 {
    HWND hwndToolTips = CreateWindowEx(WS_EX_TOPMOST, m_tooltipClass, NULL,
                          WS_POPUP | TTS_NOPREFIX | TTS_BALLOON | ((cb) ? TTS_CLOSE : 0),
@@ -83,7 +83,7 @@ BalloonNotification::Message BalloonNotification::Add(LPCTSTR text, LPCTSTR titl
    	if (m_tooltipWndExtra >= 0)
       {
          SetWindowLongPtr(hwndToolTips, m_tooltipWndExtra, (LONG_PTR)cb);
-         SetWindowLongPtr(hwndToolTips, m_tooltipWndExtra+sizeof(int), (LONG_PTR)data);
+         SetWindowLongPtr(hwndToolTips, m_tooltipWndExtra+sizeof(LONG_PTR), (LONG_PTR)data);
       }
 
       // Create a tool
@@ -93,17 +93,20 @@ BalloonNotification::Message BalloonNotification::Add(LPCTSTR text, LPCTSTR titl
       ti.hwnd = vdWindow;
       ti.uId = 0;
       ti.hinst = NULL;
-      ti.lpszText = (LPSTR)text;
-      
+      ti.lpszText = (LPWSTR)text;
+
       memset(&ti.rect, 0, sizeof(ti.rect));
       SendMessage(hwndToolTips, TTM_ADDTOOL, 0, (LPARAM) &ti);
 
       // Set the title, if any
       if (title)
-      	SendMessage(hwndToolTips, TTM_SETTITLE, (WPARAM)icon, (LPARAM)title);  
+      	SendMessage(hwndToolTips, TTM_SETTITLE, (WPARAM)icon, (LPARAM)title);
 
-      // Position and display the tooltip
-      SendMessage(hwndToolTips, TTM_TRACKPOSITION, 0, 0);
+      // Position and display the tooltip (at the bottom right of the work area of the preview window)
+      RECT workArea = PlatformHelper::GetWorkArea((HWND)vdWindow);
+      SendMessage(hwndToolTips, TTM_SETMAXTIPWIDTH, 0, PlatformHelper::ScaleForWindow(vdWindow, 300));
+      SendMessage(hwndToolTips, TTM_TRACKPOSITION, 0, MAKELPARAM(workArea.right - PlatformHelper::ScaleForWindow(vdWindow, 20),
+                                                                  workArea.bottom - PlatformHelper::ScaleForWindow(vdWindow, 10)));
       SendMessage(hwndToolTips, TTM_TRACKACTIVATE, TRUE, (LPARAM) &ti);
 
       // Setup timeout for automatically disappearing
@@ -129,7 +132,7 @@ LRESULT BalloonNotification::MyTooltipWndProc(HWND hWnd, UINT Msg, WPARAM wParam
    case WM_LBUTTONDOWN:
       cb = (ClickCb)GetWindowLongPtr(hWnd, msgManager.m_tooltipWndExtra);
       if (cb)
-         (*cb)(hWnd, GetWindowLongPtr(hWnd, msgManager.m_tooltipWndExtra+sizeof(int)));
+         (*cb)(hWnd, (LPARAM)GetWindowLongPtr(hWnd, msgManager.m_tooltipWndExtra+sizeof(LONG_PTR)));
       DestroyWindow(hWnd);
       break;
 

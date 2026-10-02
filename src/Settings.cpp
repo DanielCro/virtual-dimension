@@ -21,11 +21,11 @@
 #include "StdAfx.h"
 #include "settings.h"
 
-const char Settings::regKeyName[] = "Software\\Typz Software\\Virtual Dimension\\";
+const wchar_t Settings::regKeyName[] = L"Software\\Typz Software\\Virtual Dimension\\";
 
 static const RECT DefaultWindowPosition = {10, 10, 110, 110};
-static const LOGFONT DefaultPreviewWindowFont = {-12/*height*/,0,0,0,FW_BOLD/*weight*/,FALSE/*italic*/,0,0,0,0,0,0,0,"Arial"/*fontname*/};
-static const LOGFONT DefaultOSDFont = {-29/*height*/,0,0,0,FW_BOLD/*weight*/,TRUE/*italic*/,0,0,0,0,0,0,0,"Arial"/*fontname*/};
+static const LOGFONT DefaultPreviewWindowFont = {-12/*height*/,0,0,0,FW_BOLD/*weight*/,FALSE/*italic*/,0,0,0,0,0,0,0,L"Segoe UI"/*fontname*/};
+static const LOGFONT DefaultOSDFont = {-29/*height*/,0,0,0,FW_BOLD/*weight*/,TRUE/*italic*/,0,0,0,0,0,0,0,L"Segoe UI"/*fontname*/};
 static const POINT DefaultOSDPosition = {50,50};
 
 DEFINE_SETTING(Settings, WindowPosition, RECT, &DefaultWindowPosition);
@@ -45,7 +45,6 @@ DEFINE_SETTING(Settings, AutoSaveWindowSettings, bool, false);
 DEFINE_SETTING(Settings, CloseToTray, bool, false);
 DEFINE_SETTING(Settings, AutoSwitchDesktop, bool, true);
 DEFINE_SETTING(Settings, AllWindowsInTaskList, bool, false);
-DEFINE_SETTING(Settings, IntegrateWithShell, bool, true);
 DEFINE_SETTING(Settings, SwitchToNextDesktopHotkey, int, 0);
 DEFINE_SETTING(Settings, SwitchToPreviousDesktopHotkey, int, 0);
 DEFINE_SETTING(Settings, SwitchToTopDesktopHotkey, int, 0);
@@ -62,7 +61,7 @@ DEFINE_SETTING(Settings, TransparencyHotkey, int, 0);
 DEFINE_SETTING(Settings, TogglePreviewWindowHotkey, int, 0);
 DEFINE_SETTING(Settings, DisplayMode, int, 0);
 DEFINE_SETTING(Settings, BackgroundColor, COLORREF, RGB(0xc0,0xc0,0xc0));
-DEFINE_SETTING(Settings, BackgroundPicture, LPTSTR, "");
+DEFINE_SETTING(Settings, BackgroundPicture, LPCWSTR, L"");
 DEFINE_SETTING(Settings, DesktopNameOSD, bool, false);
 DEFINE_SETTING(Settings, PreviewWindowFont, LOGFONT, &DefaultPreviewWindowFont);
 DEFINE_SETTING(Settings, PreviewWindowFontColor, COLORREF, RGB(0,0,0));
@@ -81,194 +80,115 @@ DEFINE_SETTING(Settings, WarpRewarpDelay, DWORD, 3000);
 DEFINE_SETTING(Settings, WarpRequiredVKey, int, 0);
 DEFINE_SETTING(Settings, WarpInvertMousePos, bool, true);
 DEFINE_SETTING(Settings, DefaultHidingMethod, int, 0);
-DEFINE_SETTING(Settings, LanguageCode, int, 0);
 
 Settings::Settings(void): RegistryGroup(regKeyName)
 {
 }
 
-DWORD Settings::LoadDWord(HKEY regKey, bool keyOpened, const char * entry, DWORD defVal)
-{
-   DWORD size;
-   DWORD val;
-
-   if ( (!keyOpened) ||
-        (RegQueryValueEx(regKey, entry, NULL, NULL, NULL, &size) != ERROR_SUCCESS) ||
-        (size != sizeof(val)) ||
-        (RegQueryValueEx(regKey, entry, NULL, NULL, (LPBYTE)&val, &size) != ERROR_SUCCESS) )
-   {
-      // Cannot load the value from registry --> set default value
-      val = defVal;
-   }
-
-   return val;
-}
-
-void Settings::SaveDWord(HKEY regKey, bool keyOpened, const char * entry, DWORD value)
-{
-   if (keyOpened)
-      RegSetValueEx(regKey, entry, 0, REG_DWORD, (LPBYTE)&value, sizeof(value));
-}
-
-bool Settings::LoadBinary(HKEY regKey, bool keyOpened, const char * entry, LPBYTE buffer, DWORD length)
-{
-   DWORD size;
-
-   return (keyOpened) &&
-          (RegQueryValueEx(regKey, entry, NULL, NULL, NULL, &size) == ERROR_SUCCESS) &&
-          (size == length) &&
-          (RegQueryValueEx(regKey, entry, NULL, NULL, buffer, &size) == ERROR_SUCCESS);
-}
-
-void Settings::SaveBinary(HKEY regKey, bool keyOpened, const char * entry, LPBYTE buffer, DWORD length)
-{
-   if (keyOpened)
-      RegSetValueEx(regKey, entry, 0, REG_BINARY, buffer, length);
-}
-
-const char Settings::regKeyWindowsStartup[] = "Software\\Microsoft\\Windows\\CurrentVersion\\Run\\";
-const char Settings::regValStartWithWindows[] = "Virtual Dimension";
+const wchar_t Settings::regKeyWindowsStartup[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const wchar_t Settings::regValStartWithWindows[] = L"Virtual Dimension";
 
 bool Settings::LoadStartWithWindows()
 {
-   HKEY regKey;
-   if ((RegOpenKeyEx(HKEY_CURRENT_USER, regKeyWindowsStartup, 0, KEY_READ, &regKey) == ERROR_SUCCESS) &&
-       (RegQueryValueEx(regKey, regValStartWithWindows, NULL, NULL, NULL, NULL) == ERROR_SUCCESS))
-   {
-      RegCloseKey(regKey);
-      return true;
-   }
-   else
-      return false;
+   return RegGetValueW(HKEY_CURRENT_USER, regKeyWindowsStartup, regValStartWithWindows,
+                       RRF_RT_REG_SZ, NULL, NULL, NULL) == ERROR_SUCCESS;
 }
 
 void Settings::SaveStartWithWindows(bool start)
 {
    HKEY regKey;
-   if (RegOpenKeyEx(HKEY_CURRENT_USER, regKeyWindowsStartup, 0, KEY_WRITE, &regKey) == ERROR_SUCCESS)
+   if (RegOpenKeyExW(HKEY_CURRENT_USER, regKeyWindowsStartup, 0, KEY_WRITE, &regKey) == ERROR_SUCCESS)
    {
       if (start)
       {
-         TCHAR buffer[256];
-         GetModuleFileName(NULL, buffer, sizeof(buffer)/sizeof(TCHAR));
-         RegSetValueEx(regKey, regValStartWithWindows, 0, REG_SZ, (LPBYTE)buffer, sizeof(buffer)/sizeof(TCHAR));
+         wchar_t path[MAX_PATH];
+         wchar_t buffer[MAX_PATH+2];
+         GetModuleFileNameW(NULL, path, MAX_PATH);
+         swprintf_s(buffer, L"\"%s\"", path);
+         RegSetValueExW(regKey, regValStartWithWindows, 0, REG_SZ, (const BYTE*)buffer, (DWORD)((wcslen(buffer)+1)*sizeof(wchar_t)));
       }
       else
-         RegDeleteValue(regKey, regValStartWithWindows);
+         RegDeleteValueW(regKey, regValStartWithWindows);
       RegCloseKey(regKey);
    }
 }
 
-const char Settings::regSubKeyDisableShellIntegration[] = "DisableShellIntegration";
-const char Settings::regSubKeyHidingMethods[] = "HidingMethodsTweaks";
+const wchar_t Settings::regSubKeyHidingMethods[] = L"HidingMethodsTweaks";
 
-bool Settings::LoadDisableShellIntegration(const char * windowclass)
+int Settings::LoadHidingMethod(LPCWSTR program)
 {
-   HKEY regKey=NULL;
-   bool res;
-
-   res = m_opened &&
-         RegOpenKeyEx(m_regKey, regSubKeyDisableShellIntegration, 0, KEY_READ, &regKey) == ERROR_SUCCESS &&
-         RegQueryValueEx(regKey, windowclass, NULL, NULL, NULL, NULL) == ERROR_SUCCESS;
-
-   if (regKey!=NULL)
-      RegCloseKey(regKey);
-
-   return res;
-}
-
-void Settings::SaveDisableShellIntegration(const char * windowclass, bool enable)
-{
-   HKEY regKey=NULL;
-
-   if (m_opened &&
-       RegOpenKeyEx(m_regKey, regSubKeyDisableShellIntegration, 0, KEY_READ, &regKey) == ERROR_SUCCESS)
-   {
-      DWORD value = 0;
-
-      if (enable)
-         RegDeleteValue(regKey, windowclass);
-      else
-         RegSetValueEx(regKey, windowclass, 0, REG_DWORD, (BYTE*)&value, sizeof(value));
-
-      RegCloseKey(regKey);
-   }
-}
-
-int Settings::LoadHidingMethod(const char * windowclass)
-{
-   HKEY regKey=NULL;
    DWORD val;
    DWORD size = sizeof(val);
-   int res;
 
-   res = (m_opened &&
-          RegOpenKeyEx(m_regKey, regSubKeyHidingMethods, 0, KEY_READ, &regKey) == ERROR_SUCCESS &&
-          RegQueryValueEx(regKey, windowclass, NULL, NULL, (BYTE*)&val, &size) == ERROR_SUCCESS) ? val : LoadSetting(DefaultHidingMethod);
+   if (m_opened &&
+       RegGetValueW(m_regKey, regSubKeyHidingMethods, program, RRF_RT_REG_DWORD, NULL, &val, &size) == ERROR_SUCCESS)
+      return val;
 
-   if (regKey!=NULL)
-      RegCloseKey(regKey);
-
-   return res;
+   return LoadSetting(DefaultHidingMethod);
 }
 
-void Settings::SaveHidingMethod(const char * windowclass, int method)
+void Settings::SaveHidingMethod(LPCWSTR program, int method)
 {
    HKEY regKey=NULL;
 
    if (m_opened &&
-       RegOpenKeyEx(m_regKey, regSubKeyHidingMethods, 0, KEY_READ, &regKey) == ERROR_SUCCESS)
+       RegCreateKeyExW(m_regKey, regSubKeyHidingMethods, 0, NULL, 0, KEY_WRITE, NULL, &regKey, NULL) == ERROR_SUCCESS)
    {
       if (method == 0)
-         RegDeleteValue(regKey, windowclass);
+         RegDeleteValueW(regKey, program);
       else
-         RegSetValueEx(regKey, windowclass, 0, REG_DWORD, (BYTE*)&method, sizeof(method));
+         RegSetValueExW(regKey, program, 0, REG_DWORD, (BYTE*)&method, sizeof(method));
 
       RegCloseKey(regKey);
    }
 }
 
-const char Settings::Desktop::regKeyDesktops[] = "Desktops";
+const wchar_t Settings::Desktop::regKeyDesktops[] = L"Desktops";
 
 DEFINE_SETTING(Settings::Desktop, DeskIndex, int, 0);
-DEFINE_SETTING(Settings::Desktop, DeskWallpaper, LPTSTR, "");
+DEFINE_SETTING(Settings::Desktop, DeskWallpaper, LPCWSTR, L"");
 DEFINE_SETTING(Settings::Desktop, DeskHotkey, int, 0);
 DEFINE_SETTING(Settings::Desktop, BackgroundColor, COLORREF, GetSysColor(COLOR_DESKTOP));
 
-Settings::SubkeyList::SubkeyList(Settings * settings, const char regKey[]): m_group(*settings, regKey)
+Settings::SubkeyList::SubkeyList(Settings * settings, LPCWSTR regKey): m_group(*settings, regKey)
 {
    *m_name = 0;
 }
 
-Settings::SubkeyList::SubkeyList(Settings * settings, const char regKey[], int index): m_group(*settings, regKey)
+Settings::SubkeyList::SubkeyList(Settings * settings, LPCWSTR regKey, int index): m_group(*settings, regKey)
 {
+   *m_name = 0;
    Open(index);
 }
 
-Settings::SubkeyList::SubkeyList(Settings * settings, const char regKey[], char * name, bool create): m_group(*settings, regKey)
+Settings::SubkeyList::SubkeyList(Settings * settings, LPCWSTR regKey, LPCWSTR name, bool create): m_group(*settings, regKey)
 {
+   *m_name = 0;
    Open(name, create);
 }
 
-bool Settings::SubkeyList::Open(const char * name, bool create)
+bool Settings::SubkeyList::Open(LPCWSTR name, bool create)
 {
-	strcpy(m_name, name);
-	return Config::RegistryGroup::Open(m_group, name, create);
+   if (name == NULL)
+      return false;
+
+   lstrcpynW(m_name, name, MAX_NAME_LENGTH);
+   return Config::RegistryGroup::Open(m_group, name, create);
 }
 
 bool Settings::SubkeyList::Open(int index)
 {
    DWORD length;
-   HRESULT result;
+   LSTATUS result;
 
    if (m_opened)
       Close();
 
-   length = sizeof(m_name);
+   length = MAX_NAME_LENGTH;
    m_opened =
       (m_group.IsOpened()) &&
-      (((result = RegEnumKeyEx(m_group, index, m_name, &length, NULL, NULL, NULL, NULL)) == ERROR_SUCCESS) || (result == ERROR_MORE_DATA)) &&
-      (RegOpenKeyEx(m_group, m_name, 0, KEY_ALL_ACCESS, &m_regKey) == ERROR_SUCCESS);
+      (((result = RegEnumKeyExW(m_group, index, m_name, &length, NULL, NULL, NULL, NULL)) == ERROR_SUCCESS) || (result == ERROR_MORE_DATA)) &&
+      (RegOpenKeyExW(m_group, m_name, 0, KEY_READ | KEY_WRITE, &m_regKey) == ERROR_SUCCESS);
 
    return m_opened;
 }
@@ -285,55 +205,41 @@ void Settings::SubkeyList::Destroy()
    else
       return;
 
-   if (m_group)
-      RegDeleteKey(m_group, m_name);
+   if (m_group.IsOpened())
+      RegDeleteTreeW(m_group, m_name);
 }
 
-char * Settings::SubkeyList::GetName(char * buffer, unsigned int length)
+LPWSTR Settings::SubkeyList::GetName(LPWSTR buffer, unsigned int length)
 {
-   if (m_opened && (buffer != NULL))
-      strncpy(buffer, m_name, length);
+   if (m_opened && (buffer != NULL) && length > 0)
+      lstrcpynW(buffer, m_name, length);
 
    return buffer;
 }
 
-bool Settings::SubkeyList::Rename(char * buffer)
+bool Settings::SubkeyList::Rename(LPCWSTR name)
 {
    HKEY newKey;
-   DWORD index, max_index;
-   LPSTR value;
-   LPBYTE data;
-   DWORD value_len, type, data_len;
 
-   if (!m_opened || (strncmp(buffer, m_name, MAX_NAME_LENGTH) == 0))
+   if (!m_opened || (wcsncmp(name, m_name, MAX_NAME_LENGTH) == 0))
       return m_opened;
 
-   if ( (!m_group) ||
-        (RegCreateKeyEx(m_group, buffer, 0, NULL, REG_OPTION_NON_VOLATILE,
-                        KEY_READ | KEY_WRITE, NULL, &newKey, NULL)  != ERROR_SUCCESS) )
+   if ( (!m_group.IsOpened()) ||
+        (RegCreateKeyExW(m_group, name, 0, NULL, REG_OPTION_NON_VOLATILE,
+                         KEY_READ | KEY_WRITE, NULL, &newKey, NULL) != ERROR_SUCCESS) )
       return false;
 
-   RegQueryInfoKey(newKey, NULL, NULL, NULL, NULL, NULL, NULL,
-      &max_index, &value_len, &data_len, NULL, NULL);
-
-   value = new TCHAR[value_len+1];  //Returned length does not include the trailing NULL character
-   data = new BYTE[data_len];
-
-   for(index = 0; index < max_index; index ++)
-   {
-      RegEnumValue(m_regKey, index, value, &value_len, 0, &type, data, &data_len);
-      RegSetValueEx(newKey, value, 0, type, data, data_len);
-   }
+   RegCopyTreeW(m_regKey, NULL, newKey);
 
    Destroy();
    m_regKey = newKey;
    m_opened = true;
-   strncpy(m_name, buffer, MAX_NAME_LENGTH);
+   lstrcpynW(m_name, name, MAX_NAME_LENGTH);
 
    return true;
 }
 
-const char Settings::Window::regKeyWindows[] = "Windows";
+const wchar_t Settings::Window::regKeyWindows[] = L"Windows";
 
 static const RECT DefaultWindowAutoPosition = { 0, 200, 0, 300 };
 

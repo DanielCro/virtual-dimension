@@ -19,55 +19,16 @@
  */
 
 #include "StdAfx.h"
-#include "window.h"
+#include "Window.h"
 #include "VirtualDimension.h"
 #include "Settings.h"
 #include "Locale.h"
-
-#ifndef TBM_SETBUDDY
-#define TBM_SETBUDDY (WM_USER+32)
-#endif
 
 void FormatTransparencyLevel(HWND hWnd, int level);
 
 void Window::OpenSettings(Settings::Window &settings, bool create)
 {
    settings.Open(m_className, create);
-}
-
-LRESULT CALLBACK Window::PropertiesProc(HWND hDlg, UINT message, WPARAM /*wParam*/, LPARAM lParam)
-{
-   Window * self;
-
-	switch (message)
-	{
-	case WM_INITDIALOG:
-      {
-         LPPROPSHEETPAGE lpPage = (LPPROPSHEETPAGE)lParam;
-         self = (Window*)lpPage->lParam;
-
-         //Store the pointer to the window, for futur use
-         SetWindowLongPtr(hDlg, DWLP_USER, (LONG_PTR)self);
-
-         //Perform initialization
-         return TRUE;
-      }
-
-   case WM_NOTIFY:
-      LPNMHDR pnmh = (LPNMHDR) lParam;
-      switch (pnmh->code)
-      {
-      case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
-         return TRUE;
-
-      case PSN_APPLY:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
-         return TRUE;
-      }
-      break;
-	}
-	return FALSE;
 }
 
 void Window::OnInitSettingsDlg(HWND hDlg)
@@ -181,7 +142,7 @@ void Window::OnApplySettingsBtn(HWND hDlg)
    SetTransparent(res);
 }
 
-LRESULT CALLBACK Window::SettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK Window::SettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
    Window * self;
 
@@ -221,7 +182,7 @@ LRESULT CALLBACK Window::SettingsProc(HWND hDlg, UINT message, WPARAM wParam, LP
          case TB_PAGEUP:
          case TB_TOP :
          default:
-            pos = SendMessage((HWND)lParam, TBM_GETPOS, 0, 0);
+            pos = (int)SendMessage((HWND)lParam, TBM_GETPOS, 0, 0);
             break;
          }
          FormatTransparencyLevel(GetDlgItem(hDlg, IDC_TRANSP_DISP), pos);
@@ -234,13 +195,13 @@ LRESULT CALLBACK Window::SettingsProc(HWND hDlg, UINT message, WPARAM wParam, LP
       switch (pnmh->code)
       {
       case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
          self = (Window *)GetWindowLongPtr(hDlg, DWLP_USER);
          self->OnApplySettingsBtn(hDlg);
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
          return TRUE;
       }
       break;
@@ -353,7 +314,7 @@ void Window::OnUpdateAutoSettingsUI(HWND hDlg, AutoSettingsModes mode)
    EnableWindow(GetDlgItem(hDlg, IDC_AUTODESK_CHECK), mode != ASS_DISABLED);
 }
 
-LRESULT CALLBACK Window::AutoSettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK Window::AutoSettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
    Window * self;
 
@@ -408,13 +369,13 @@ LRESULT CALLBACK Window::AutoSettingsProc(HWND hDlg, UINT message, WPARAM wParam
       switch (pnmh->code)
       {
       case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
          self = (Window *)GetWindowLongPtr(hDlg, DWLP_USER);
          self->OnApplyAutoSettingsBtn(hDlg);
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
          return TRUE;
       }
       break;
@@ -422,14 +383,9 @@ LRESULT CALLBACK Window::AutoSettingsProc(HWND hDlg, UINT message, WPARAM wParam
 	return FALSE;
 }
 
-LRESULT CALLBACK Window::FilterSettingsProc(HWND /*hDlg*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
-{
-   return FALSE;
-}
-
 void Window::DisplayWindowProperties()
 {
-   PROPSHEETPAGE pages[3];
+   PROPSHEETPAGE pages[2];
    PROPSHEETHEADER propsheet;
 	HINSTANCE hresinst = Locale::GetInstance();
 	int page = 0;
@@ -439,26 +395,19 @@ void Window::DisplayWindowProperties()
    pages[page].dwSize = sizeof(PROPSHEETPAGE);
 	pages[page].hInstance = hresinst;
    pages[page].dwFlags = PSP_DEFAULT;
-   pages[page].pfnDlgProc = (DLGPROC)SettingsProc;
+   pages[page].pfnDlgProc = SettingsProc;
    pages[page].lParam = (LPARAM)this;
-   pages[page].pszTemplate = MAKEINTRESOURCE(IDD_WINDOW_SETTINGS);\
+   pages[page].pszTemplate = MAKEINTRESOURCE(IDD_WINDOW_SETTINGS);
    page++;
 
    pages[page].dwSize = sizeof(PROPSHEETPAGE);
    pages[page].hInstance = hresinst;
    pages[page].dwFlags = PSP_DEFAULT;
-   pages[page].pfnDlgProc = (DLGPROC)AutoSettingsProc;
+   pages[page].pfnDlgProc = AutoSettingsProc;
    pages[page].lParam = (LPARAM)this;
    pages[page].pszTemplate = MAKEINTRESOURCE(IDD_WINDOW_AUTOSETTINGS);
    page++;
 
-   pages[page].dwSize = sizeof(PROPSHEETPAGE);
-   pages[page].hInstance = hresinst;
-   pages[page].dwFlags = PSP_DEFAULT;
-   pages[page].pfnDlgProc = (DLGPROC)FilterSettingsProc;
-   pages[page].lParam = (LPARAM)this;
-   pages[page].pszTemplate = MAKEINTRESOURCE(IDD_WINDOW_FILTER);
-   page++;
 
    memset(&propsheet, 0, sizeof(propsheet));
    propsheet.dwSize = sizeof(PROPSHEETHEADER);

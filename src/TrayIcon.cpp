@@ -1,26 +1,26 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
 
 #include "StdAfx.h"
-#include "trayicon.h"
-#include "settings.h"
+#include "TrayIcon.h"
+#include "Settings.h"
 #include "VirtualDimension.h"
 #include "DesktopManager.h"
 #include "Locale.h"
@@ -76,14 +76,14 @@ void TrayIcon::SetIcon(bool res)
 
 LRESULT TrayIcon::OnTrayIconMessage(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM lParam)
 {
-   switch(lParam)
+   switch(LOWORD(lParam))
    {
-   case WM_RBUTTONDOWN:
+   case WM_RBUTTONUP:
    case WM_CONTEXTMENU:
       OnContextMenu();
       break;
 
-   case WM_LBUTTONDOWN:
+   case WM_LBUTTONUP:
       OnLeftButtonDown();
       break;
    }
@@ -95,7 +95,7 @@ void TrayIcon::OnContextMenu()
 {
    HMENU hMenu, hmenuTrackPopup;
    POINT pt;
-   HRESULT res;
+   int res;
    int i;
    Desktop * desk;
 
@@ -121,9 +121,8 @@ void TrayIcon::OnContextMenu()
          mii.fState = MFS_CHECKED;
       else
          mii.fState = MFS_UNCHECKED;
-      mii.dwItemData = (DWORD)desk;
-      mii.dwTypeData = desk->GetText();
-      mii.cch = strlen(mii.dwTypeData);
+      mii.dwItemData = (ULONG_PTR)desk;
+      mii.dwTypeData = (LPWSTR)desk->GetText();
       mii.wID = WM_USER + i++;
       InsertMenuItem(hmenuTrackPopup, 0, TRUE, &mii);
    }
@@ -147,7 +146,7 @@ void TrayIcon::OnContextMenu()
       deskMan->SwitchToDesktop(desk);
       InvalidateRect(m_hWnd, NULL, TRUE);
    }
-   else
+   else if (res)
       PostMessage(m_hWnd, WM_COMMAND, res, 0);
 
    //Do not forget to destroy the menu
@@ -177,15 +176,16 @@ LRESULT TrayIcon::OnCmdClose(HWND hWnd, UINT /*message*/, WPARAM /*wParam*/, LPA
 
 HICON TrayIcon::GetIcon()
 {
-   return LoadIcon(vdWindow, (LPCSTR)IDI_VIRTUALDIMENSION); 
+   return (HICON)LoadImage(vdWindow, MAKEINTRESOURCE(IDI_VIRTUALDIMENSION), IMAGE_ICON,
+                           GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
 }
 
-char* TrayIcon::GetText()
+LPCWSTR TrayIcon::GetText()
 {
    if (deskMan && deskMan->GetCurrentDesktop())
       return deskMan->GetCurrentDesktop()->GetText();
    else
-      return "";
+      return L"";
 }
 
 void TrayIcon::ToggleWindowEventHandler::OnHotkey()

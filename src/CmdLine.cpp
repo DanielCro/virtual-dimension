@@ -20,23 +20,37 @@
 
 #include "StdAfx.h"
 #include "CmdLine.h"
-#include "StdString.h"
+#include "Resource.h"
 
 using namespace std;
 
-map<char, CommandLineOption*> CommandLineOption::s_argsmap;
+map<wchar_t, CommandLineOption*>& CommandLineOption::GetOptionsMap()
+{
+   //Function-local static: options are registered by static constructors
+   static map<wchar_t, CommandLineOption*> argsmap;
+   return argsmap;
+}
 
-CommandLineOption::CommandLineOption(char opcode, UINT resid, ArgType arg): m_resid(resid), m_argType(arg)
+CommandLineOption::CommandLineOption(wchar_t opcode, UINT resid, ArgType arg): m_resid(resid), m_argType(arg)
 {
    CommandLineOption::RegisterOption(opcode, this);
 }
 
-CommandLineParser::CommandLineParser()
+CommandLineParser::CommandLineParser(): m_argState(NONE), m_curOption(NULL)
 {
 }
 
 CommandLineParser::~CommandLineParser()
 {
+}
+
+static bool CommandLineError(UINT uIdMessage, LPCWSTR arg)
+{
+   String message = Locale::GetInstance().GetString(uIdMessage);
+   if (arg)
+      message += arg;
+   MessageBox(NULL, message.c_str(), Locale::GetInstance().GetString(IDS_CMDLINE_TITLE), MB_ICONERROR);
+   return false;
 }
 
 bool CommandLineParser::ProcessArg(LPCTSTR arg)
@@ -47,10 +61,10 @@ bool CommandLineParser::ProcessArg(LPCTSTR arg)
    switch(m_argState)
    {
    case NONE:
-      if (arg[0] != '-')
-         res = (MessageBox(NULL, arg, "No an option", MB_ICONERROR), false); //no an option
+      if (arg[0] != L'-' && arg[0] != L'/')
+         res = CommandLineError(IDS_CMDLINE_NOTANOPTION, arg);
       else if ((m_curOption = CommandLineOption::GetOption(arg[1])) == NULL)
-         res = (MessageBox(NULL, arg, "Invalid option", MB_ICONERROR), false); //invalid option
+         res = CommandLineError(IDS_CMDLINE_INVALIDOPTION, arg);
       else if (m_curOption->GetArgType() == CommandLineOption::required_argument)
          m_argState = REQARG;
       else if (m_curOption->GetArgType() == CommandLineOption::optional_argument)
@@ -65,10 +79,9 @@ bool CommandLineParser::ProcessArg(LPCTSTR arg)
       break;
 
    case OPTARG:
-      if (arg[0] == '-' && (option = CommandLineOption::GetOption(arg[1])) != NULL)
+      if ((arg[0] == L'-' || arg[0] == L'/') && (option = CommandLineOption::GetOption(arg[1])) != NULL)
       {
          m_curOption->ParseOption();   //no argument !
-
          m_curOption = option;
          if (m_curOption->GetArgType() == CommandLineOption::required_argument)
             m_argState = REQARG;
@@ -102,8 +115,7 @@ bool CommandLineParser::EndParsing()
       break;
 
    case REQARG:
-      MessageBox(NULL, "The last argument needs an argument, which is not provided", "Invalid command line", MB_ICONERROR);
-      res = false;
+      res = CommandLineError(IDS_CMDLINE_MISSINGARG, NULL);
       break;
 
    case OPTARG:
@@ -114,98 +126,36 @@ bool CommandLineParser::EndParsing()
    return res;
 }
 
-bool CommandLineParser::ParseCommandLine(LPTSTR cmdline)
+bool CommandLineParser::ParseCommandLine(LPCWSTR cmdline)
 {
-#define ESCAPE_CHAR  '\\'
-#define QUOTE_CHAR   '"'
-
-   enum { IDLE, ARG, STRARG } state = IDLE;
-   enum { SPACE, QUOTE, OTHER } token;
-   TCHAR value;
-   CStdString arg;
+   int argc = 0;
+   LPWSTR * argv;
    bool res = true;
 
+   //Let Windows split the arguments (it handles quotes the standard way)
+   argv = CommandLineToArgvW(cmdline, &argc);
+   if (argv == NULL)
+      return false;
+
    m_argState = NONE;
-
-   while(res && *cmdline)
-   {
-      value = *cmdline++;
-
-      //Tokenizer
-      if (value == ESCAPE_CHAR)
-      {
-         //Beginning of an escape char. The actual char is the next one.
-         //If this is the end of the string, handle the escape as a regular character.
-         if (*cmdline)
-            value = *cmdline++;
-         token = OTHER;
-      }
-      else if (isspace(value))
-         token = SPACE;
-      else if (value == QUOTE_CHAR)
-         token = QUOTE;
-      else
-         token = OTHER;
-
-      //Parser
-      switch(state)
-      {
-      case IDLE:
-         if (token == QUOTE)
-         {
-            arg = "";
-            state = STRARG;
-         }
-         else if (token != SPACE)
-         {
-            arg = value;
-            state = ARG;
-         }
-         break;
-
-      case ARG:
-         if (token == SPACE)
-         {
-            res = ProcessArg(arg);
-            arg = "";
-         }
-         else if (token == QUOTE)
-            state = STRARG;
-         else
-            arg += value;
-         break;
-
-      case STRARG:
-         if (token == QUOTE)
-            state = ARG;
-         else
-            arg += value;
-         break;
-      }
-   }
-
-   //Process the last argument, which may not have been processed yet
-   //(e.g. if it was not followed by spaces)
-   if (res && arg != "")
-      res = ProcessArg(arg);
+   for(int i = 0; res && i < argc; i++)
+      res = ProcessArg(argv[i]);
 
    if (res)
       res = EndParsing();
 
-#undef ESCAPE_CHAR
-#undef QUOTE_CHAR
+   LocalFree(argv);
 
-	return res;
+   return res;
 }
 
-CommandLineOption * CommandLineOption::GetOption(char opcode)
+CommandLineOption * CommandLineOption::GetOption(wchar_t opcode)
 {
-   map<char, CommandLineOption*>::iterator it = s_argsmap.find(opcode);
-   return it == s_argsmap.end() ? NULL : (*it).second;
+   map<wchar_t, CommandLineOption*>::iterator it = GetOptionsMap().find(opcode);
+   return it == GetOptionsMap().end() ? NULL : (*it).second;
 }
 
-void CommandLineOption::RegisterOption(char opcode, CommandLineOption* option)
+void CommandLineOption::RegisterOption(wchar_t opcode, CommandLineOption* option)
 {
-   s_argsmap[opcode] = option;
+   GetOptionsMap()[opcode] = option;
 }
-

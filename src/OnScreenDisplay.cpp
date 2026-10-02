@@ -1,19 +1,19 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
@@ -31,7 +31,8 @@ OnScreenDisplayWnd::OnScreenDisplayWnd(): m_transp(NULL)
    Settings settings;
 
    settings.LoadSetting(Settings::OSDFont, &m_lf);
-   m_font = CreateFontIndirect(&m_lf);
+   m_font = NULL;
+   UpdateFont();
 
    SetDefaultTimeout(settings.LoadSetting(Settings::OSDTimeout));
    m_fgColor = settings.LoadSetting(Settings::OSDFgColor);
@@ -67,9 +68,9 @@ void OnScreenDisplayWnd::Create()
 {
    RegisterClass();
 
-   m_hWnd = CreateWindowEx( WS_EX_TOPMOST | (m_isTransparent ? WS_EX_TRANSPARENT : 0) | WS_EX_TOOLWINDOW, 
-                            (LPTSTR)MAKEINTRESOURCE(s_classAtom), "OSD", WS_POPUP, 
-                            m_position.x, m_position.y, 0, 0, 
+   m_hWnd = CreateWindowEx( WS_EX_TOPMOST | (m_isTransparent ? WS_EX_TRANSPARENT : 0) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                            (LPCWSTR)MAKEINTRESOURCE(s_classAtom), L"OSD", WS_POPUP,
+                            m_position.x, m_position.y, 0, 0,
                             NULL, NULL, vdWindow, this);
    ShowWindowAsync(m_hWnd, SW_HIDE);
 
@@ -77,19 +78,19 @@ void OnScreenDisplayWnd::Create()
    m_transp->SetTransparencyLevel(m_hasBackground ? m_transpLevel : (unsigned char)255 );
 }
 
-void OnScreenDisplayWnd::Display(char * str, int timeout)
+void OnScreenDisplayWnd::Display(LPCWSTR str, int timeout)
 {
    SIZE size;
    HFONT defFont;
    HDC hdc;
 
    if (str != m_text)
-      strncpy(m_text, str, sizeof(m_text));
+      lstrcpynW(m_text, str, sizeof(m_text)/sizeof(*m_text));
 
    hdc = GetWindowDC(m_hWnd);
    defFont = (HFONT)SelectObject(hdc, m_font);
    SetTextColor(hdc, m_fgColor);
-   GetTextExtentPoint32(hdc, m_text, strlen(m_text), &size);
+   GetTextExtentPoint32(hdc, m_text, (int)wcslen(m_text), &size);
    SelectObject(hdc, defFont);
    ReleaseDC(m_hWnd, hdc);
 
@@ -97,7 +98,7 @@ void OnScreenDisplayWnd::Display(char * str, int timeout)
    if (!m_hasBackground && IsWindowVisible(m_hWnd))
       ShowWindowAsync(m_hWnd, SW_HIDE);
 
-   SetWindowPos(m_hWnd, NULL, 0, 0, size.cx+10, size.cy+10, 
+   SetWindowPos(m_hWnd, NULL, 0, 0, size.cx+10, size.cy+10,
                 SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOCOPYBITS|SWP_NOREPOSITION);
    InvalidateRect(m_hWnd, NULL, TRUE);
 
@@ -107,34 +108,50 @@ void OnScreenDisplayWnd::Display(char * str, int timeout)
       SetTimer(m_hWnd, 1, timeout, NULL);
 }
 
-void OnScreenDisplayWnd::SelectFont()
+void OnScreenDisplayWnd::SelectOSDFont()
 {
-   CHOOSEFONT cf; 
+   CHOOSEFONT cf;
+   LOGFONT lf = m_lf;
+   UINT dpi = GetDpiForSystem();
 
-   cf.lStructSize = sizeof(CHOOSEFONT); 
-   cf.hwndOwner = vdWindow; 
-   cf.hDC = (HDC)NULL; 
-   cf.lpLogFont = &m_lf; 
-   cf.iPointSize = 0; 
-   cf.Flags = CF_SCREENFONTS | CF_EFFECTS | CF_FORCEFONTEXIST | CF_INITTOLOGFONTSTRUCT; 
-   cf.rgbColors = m_fgColor; 
-   cf.lCustData = 0; 
-   cf.lpfnHook = (LPCFHOOKPROC)NULL; 
-   cf.lpTemplateName = (LPSTR)NULL; 
-   cf.hInstance = (HINSTANCE)vdWindow; 
-   cf.lpszStyle = (LPSTR)NULL; 
-   cf.nFontType = SCREEN_FONTTYPE; 
-   cf.nSizeMin = 0; 
-   cf.nSizeMax = 0; 
+   //The font dialog works with the actual screen resolution
+   lf.lfHeight = MulDiv(lf.lfHeight, dpi, USER_DEFAULT_SCREEN_DPI);
+
+   cf.lStructSize = sizeof(CHOOSEFONT);
+   cf.hwndOwner = vdWindow;
+   cf.hDC = (HDC)NULL;
+   cf.lpLogFont = &lf;
+   cf.iPointSize = 0;
+   cf.Flags = CF_SCREENFONTS | CF_EFFECTS | CF_FORCEFONTEXIST | CF_INITTOLOGFONTSTRUCT;
+   cf.rgbColors = m_fgColor;
+   cf.lCustData = 0;
+   cf.lpfnHook = (LPCFHOOKPROC)NULL;
+   cf.lpTemplateName = NULL;
+   cf.hInstance = (HINSTANCE)vdWindow;
+   cf.lpszStyle = NULL;
+   cf.nFontType = SCREEN_FONTTYPE;
+   cf.nSizeMin = 0;
+   cf.nSizeMax = 0;
 
    if (ChooseFont(&cf))
    {
-      if (m_font)
-         DeleteObject(m_font);
-
-      m_font = CreateFontIndirect(cf.lpLogFont); 
+      m_lf = lf;
+      m_lf.lfHeight = MulDiv(lf.lfHeight, USER_DEFAULT_SCREEN_DPI, dpi);
+      UpdateFont();
       m_fgColor = cf.rgbColors;
    }
+}
+
+void OnScreenDisplayWnd::UpdateFont()
+{
+   LOGFONT lf = m_lf;
+
+   if (m_font)
+      DeleteObject(m_font);
+
+   //The font size is expressed for 96 DPI
+   lf.lfHeight = MulDiv(lf.lfHeight, GetDpiForSystem(), USER_DEFAULT_SCREEN_DPI);
+   m_font = CreateFontIndirect(&lf);
 }
 
 void OnScreenDisplayWnd::SelectBgColor()
@@ -239,7 +256,7 @@ void OnScreenDisplayWnd::OnLeftButtonDown(LPARAM lParam)
 void OnScreenDisplayWnd::OnLeftButtonDblClk()
 {
    KillTimer(m_hWnd, 1);
-   SelectFont();
+   SelectOSDFont();
    Display(m_text, m_lastTimeout);
 }
 
@@ -261,7 +278,7 @@ void OnScreenDisplayWnd::RegisterClass()
    if (s_classAtom)
       return;
 
-	wcex.cbSize = sizeof(WNDCLASSEX); 
+	wcex.cbSize = sizeof(WNDCLASSEX);
 
    wcex.style			  = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
 	wcex.lpfnWndProc	  = (WNDPROC)osdProc;
@@ -272,7 +289,7 @@ void OnScreenDisplayWnd::RegisterClass()
 	wcex.hCursor		  = LoadCursor(NULL, IDC_ARROW);
    wcex.hbrBackground  = NULL;
 	wcex.lpszMenuName	  = NULL;
-	wcex.lpszClassName  = "OSDWindow";
+	wcex.lpszClassName  = L"OSDWindow";
 	wcex.hIconSm		  = NULL;
 
 	s_classAtom = RegisterClassEx(&wcex);
@@ -284,7 +301,7 @@ LRESULT CALLBACK OnScreenDisplayWnd::osdProc(HWND hWnd, UINT message, WPARAM wPa
 	HDC hdc;
    OnScreenDisplayWnd* osd;
 
-	switch (message) 
+	switch (message)
 	{
    case WM_CREATE:
       SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)((LPCREATESTRUCT)lParam)->lpCreateParams);

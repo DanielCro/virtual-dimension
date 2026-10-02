@@ -28,7 +28,7 @@ static ATOM RegisterHyperLinkClass(HINSTANCE hInstance);
 static LRESULT CALLBACK	HyperLinkWndProc(HWND, UINT, WPARAM, LPARAM);
 static HFONT GetHyperLinkFont(HWND hWnd, HDC hdc);
 static void ActivateLink(HWND hWnd);
-static void ResizeToText(HWND hWnd, LPTSTR text);
+static void ResizeToText(HWND hWnd, LPCWSTR text);
 
 void InitHyperLinkControl()
 {
@@ -56,7 +56,7 @@ static ATOM RegisterHyperLinkClass(HINSTANCE hInstance)
    wcex.hCursor		= LoadCursor(NULL, IDC_HAND);
    wcex.hbrBackground= (HBRUSH)(COLOR_3DFACE+1);
 	wcex.lpszMenuName	= NULL;
-	wcex.lpszClassName= "HyperLinkControl";
+	wcex.lpszClassName= L"HyperLinkControl";
 	wcex.hIconSm		= NULL;
 
 	return RegisterClassEx(&wcex);
@@ -108,13 +108,13 @@ static void ActivateLink(HWND hWnd)
    SendMessage(GetParent(hWnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(hWnd), STN_CLICKED), 0);
 }
 
-static void ResizeToText(HWND hWnd, LPTSTR text)
+static void ResizeToText(HWND hWnd, LPCWSTR text)
 {
    SIZE size;
    HDC hdc = GetDC(hWnd);
 
    SelectObject(hdc, GetHyperLinkFont(hWnd, hdc));
-   GetTextExtentPoint32(hdc, text, strlen(text), &size);
+   GetTextExtentPoint32(hdc, text, (int)wcslen(text), &size);
 
    ReleaseDC(hWnd, hdc);
 
@@ -147,7 +147,7 @@ static LRESULT CALLBACK HyperLinkWndProc(HWND hWnd, UINT message, WPARAM wParam,
       memset(hlCtrl, 0, sizeof(HLControl));
       hlCtrl->m_focused = false;
       SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)hlCtrl);
-      
+
       //Setup initial text. We must bypass our own implementation of WM_GETTEXT,
       //so we must call directoy DefWindowProc().
       DefWindowProc(hWnd, WM_GETTEXT, (WPARAM)MAX_PATH, (LPARAM)hlCtrl->m_text);
@@ -172,14 +172,15 @@ static LRESULT CALLBACK HyperLinkWndProc(HWND hWnd, UINT message, WPARAM wParam,
 
    case WM_SETTEXT:
       hlCtrl = (HLControl *)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-      strncpy(hlCtrl->m_text, (LPTSTR)lParam, MAX_PATH);
+      lstrcpynW(hlCtrl->m_text, (LPCWSTR)lParam, MAX_PATH);
       ResizeToText(hWnd, hlCtrl->m_text);
       RepaintBackground(hWnd);
       break;
 
    case WM_GETTEXT:
       hlCtrl = (HLControl *)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-      strncpy((LPTSTR)lParam, hlCtrl->m_text, (int)wParam);
+      lstrcpynW((LPWSTR)lParam, hlCtrl->m_text, (int)wParam);
+      return wcslen((LPWSTR)lParam);
       break;
 
    case WM_SETFOCUS:

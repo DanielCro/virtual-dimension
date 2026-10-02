@@ -20,67 +20,193 @@
 
 #include "StdAfx.h"
 #include "WallPaper.h"
-#include "PlatformHelper.h"
 #include "BackgroundColor.h"
-#include "ExplorerWrapper.h"
+#include "PlatformHelper.h"
+#include <shobjidl.h>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <wrl/client.h>
+
+using Microsoft::WRL::ComPtr;
+
+/** Worker thread applying the wallpapers.
+ * Only the last request matters: intermediate requests are dropped.
+ */
+class WallPaperApplier
+{
+public:
+   struct Request
+   {
+      enum { SET_DEFAULT, SET_NONE, SET_IMAGE, STOP } action;
+      std::wstring fileName;
+      COLORREF color;
+   };
+
+   static WallPaperApplier& GetInstance()    { static WallPaperApplier instance; return instance; }
+
+   void Post(const Request& request)
+   {
+      {
+         std::lock_guard<std::mutex> lock(m_mutex);
+         if (m_stopped)
+            return;
+         if (!m_thread.joinable())
+            m_thread = std::thread(&WallPaperApplier::ThreadProc, this);
+         m_request = request;
+         m_pending = true;
+      }
+      m_cond.notify_one();
+   }
+
+   void Stop()
+   {
+      Request request;
+      request.action = Request::STOP;
+      request.color = CLR_INVALID;
+      Post(request);
+
+      if (m_thread.joinable())
+         m_thread.join();
+   }
+
+protected:
+   WallPaperApplier(): m_pending(false), m_stopped(false), m_changed(false) { }
+   ~WallPaperApplier()
+   {
+      if (m_thread.joinable())
+         m_thread.detach();
+   }
+
+   void ThreadProc()
+   {
+      ComPtr<IDesktopWallpaper> wallpaper;
+
+      CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+      CoCreateInstance(CLSID_DesktopWallpaper, NULL, CLSCTX_ALL, IID_PPV_ARGS(&wallpaper));
+
+      for(;;)
+      {
+         Request request;
+         {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_cond.wait(lock, [this]{ return m_pending; });
+            request = m_request;
+            m_pending = false;
+            if (request.action == Request::STOP)
+               m_stopped = true;
+         }
+
+         if (wallpaper)
+            Apply(wallpaper.Get(), request);
+
+         if (request.color != CLR_INVALID)
+            BackgroundColor::GetInstance().SetColor(request.color);
+
+         if (request.action == Request::STOP)
+            break;
+      }
+
+      wallpaper.Reset();
+      CoUninitialize();
+   }
+
+   void Apply(IDesktopWallpaper * wallpaper, const Request& request)
+   {
+      switch(request.action)
+      {
+      case Request::SET_DEFAULT:
+      case Request::STOP:
+         //Restore the wallpapers of Windows, if we changed them
+         if (m_changed)
+         {
+            for(std::map<std::wstring, std::wstring>::iterator it = m_original.begin(); it != m_original.end(); it++)
+               wallpaper->SetWallpaper(it->first.c_str(), it->second.c_str());
+            m_changed = false;
+         }
+         break;
+
+      case Request::SET_NONE:
+      case Request::SET_IMAGE:
+         //Remember the wallpapers of Windows before changing them
+         if (!m_changed)
+            SaveOriginalWallpapers(wallpaper);
+         m_changed = true;
+         wallpaper->SetWallpaper(NULL, request.action == Request::SET_IMAGE ? request.fileName.c_str() : L"");
+         break;
+      }
+   }
+
+   void SaveOriginalWallpapers(IDesktopWallpaper * wallpaper)
+   {
+      UINT count = 0;
+
+      m_original.clear();
+      if (FAILED(wallpaper->GetMonitorDevicePathCount(&count)))
+         return;
+
+      for(UINT i = 0; i < count; i++)
+      {
+         LPWSTR monitorId = NULL;
+         LPWSTR path = NULL;
+
+         if (SUCCEEDED(wallpaper->GetMonitorDevicePathAt(i, &monitorId)) &&
+             SUCCEEDED(wallpaper->GetWallpaper(monitorId, &path)))
+            m_original[monitorId] = path ? path : L"";
+
+         CoTaskMemFree(path);
+         CoTaskMemFree(monitorId);
+      }
+   }
+
+   std::thread m_thread;
+   std::mutex m_mutex;
+   std::condition_variable m_cond;
+   Request m_request;
+   bool m_pending;
+   bool m_stopped;
+
+   //Only used by the worker thread
+   bool m_changed;
+   std::map<std::wstring, std::wstring> m_original;   //monitor id -> wallpaper
+};
+
 
 WallPaper * WallPaper::m_activeWallPaper = NULL;
-bool WallPaper::m_defaultWallpaperInit = false;
-TCHAR WallPaper::m_defaultWallpaper[MAX_PATH];
+std::wstring WallPaper::m_defaultWallpaper;
 
-WallPaper::WallPaper()
+WallPaper::WallPaper(): m_mode(WP_DEFAULT), m_bkColor(GetSysColor(COLOR_DESKTOP))
 {
-   LoadDefaultWallpaper();
-
-   m_fileName = m_bmpFileName = NULL;
-   SetImage("");
-}
-
-WallPaper::WallPaper(LPTSTR fileName)
-{
-   LoadDefaultWallpaper();
-
-   m_fileName = m_bmpFileName = NULL;
-   SetImage(fileName);
+   if (m_defaultWallpaper.empty())
+      RefreshDefaultWallpaper();
 }
 
 WallPaper::~WallPaper(void)
 {
-   if (m_fileName != m_bmpFileName)
-   {
-      DeleteFile(m_bmpFileName);
-      delete m_bmpFileName;
-   }
-
-   //Restore default wallpaper if this is the last Wallpaper object
    if (m_activeWallPaper == this)
-   {
-      //Restore wallpaper set the old way, or remove it if using Active Desktop
-      SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, SETWALLPAPER_DEFAULT, 0);
-
-      //Restore active desktop wallpaper, if any
-      if (explorerWrapper->HasActiveDesktop() && *m_defaultWallpaper != 0)
-         explorerWrapper->GetActiveDesktop()->ApplyChanges(AD_APPLY_REFRESH);
-   }
+      m_activeWallPaper = NULL;
 }
 
-void WallPaper::LoadDefaultWallpaper()
+LPCWSTR WallPaper::GetDefaultWallpaper()
 {
-   if (!m_defaultWallpaperInit)
-   {
-      WCHAR buffer[MAX_PATH];
+   return m_defaultWallpaper.c_str();
+}
 
-      //Try to get default wallpaper using active desktop
-      if (!explorerWrapper->BindActiveDesktop() ||
-          explorerWrapper->GetActiveDesktop()->GetWallpaper(buffer, sizeof(buffer)/sizeof(WCHAR), 0) != S_OK ||
-          WideCharToMultiByte(CP_OEMCP, 0, buffer, -1, m_defaultWallpaper, sizeof(m_defaultWallpaper), NULL, NULL) == 0)
-      {
-         //If we could not get the default wallpaper properly from active desktop, try to get it from system parameters...
-         SystemParametersInfo(SPI_GETDESKWALLPAPER, sizeof(m_defaultWallpaper)/sizeof(TCHAR), m_defaultWallpaper, 0);
-      }
+void WallPaper::RefreshDefaultWallpaper()
+{
+   //Only possible while the wallpaper of Windows is displayed
+   if (m_activeWallPaper && m_activeWallPaper->m_mode != WP_DEFAULT)
+      return;
 
-      m_defaultWallpaperInit = true;
-   }
+   wchar_t path[MAX_PATH] = L"";
+   SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0);
+   m_defaultWallpaper = path;
+}
+
+void WallPaper::Shutdown()
+{
+   m_activeWallPaper = NULL;
+   WallPaperApplier::GetInstance().Stop();
 }
 
 void WallPaper::Activate()
@@ -89,30 +215,29 @@ void WallPaper::Activate()
       return;
 
    m_activeWallPaper = this;
-   m_wallPaperLoader.LoadImageAsync(this);
+   Apply();
 }
 
-/** Set the wallpaper.
- * Points to the path of the image to use, or an empty string for default wallpaper (the one set when VD was started),
- * or NULL to disable the wallpaper.
- */
-void WallPaper::SetImage(LPTSTR fileName)
+void WallPaper::Refresh()
 {
-   if (m_fileName != m_bmpFileName)
+   if (m_activeWallPaper == this)
+      Apply();
+}
+
+void WallPaper::SetImage(LPCWSTR fileName)
+{
+   if (fileName == NULL)
+      m_mode = WP_NONE;
+   else if (*fileName == 0)
+      m_mode = WP_DEFAULT;
+   else
    {
-      DeleteFile(m_bmpFileName);
-      delete m_bmpFileName;
+      m_mode = WP_IMAGE;
+      m_fileName = fileName;
    }
 
-   m_useDefaultWallpaper = (fileName != NULL && *fileName == 0);
-   if (m_useDefaultWallpaper)
-      m_fileName = m_defaultWallpaper;
-   else
-      m_fileName = fileName;
-   m_bmpFileName = NULL;   //lazy image loading: load it the first time it is used
-
    if (m_activeWallPaper == this)
-      m_wallPaperLoader.LoadImageAsync(this);
+      Apply();
 }
 
 void WallPaper::SetColor(COLORREF bkColor)
@@ -123,110 +248,21 @@ void WallPaper::SetColor(COLORREF bkColor)
    m_bkColor = bkColor;
 
    if (m_activeWallPaper == this)
-      m_wallPaperLoader.LoadImageAsync(this);
+      Apply();
 }
 
-WallPaper::WallPaperLoader WallPaper::m_wallPaperLoader;
-
-WallPaper::WallPaperLoader::WallPaperLoader()
+void WallPaper::Apply()
 {
-   DWORD dwThreadId;
+   WallPaperApplier::Request request;
 
-   m_hStopThread = CreateEvent(NULL, TRUE, FALSE, NULL);
-   m_hQueueSem = CreateSemaphore(NULL, 0, 1000, NULL);
-   m_hQueueMutex = CreateMutex(NULL, FALSE, NULL);
-   m_hWallPaperLoaderThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ThreadProc,
-                                           this, 0, &dwThreadId);
-}
-
-WallPaper::WallPaperLoader::~WallPaperLoader()
-{
-   SetEvent(m_hStopThread);
-   WaitForSingleObject(m_hWallPaperLoaderThread, INFINITE);
-
-   CloseHandle(m_hStopThread);
-   CloseHandle(m_hQueueMutex);
-   CloseHandle(m_hQueueSem);
-
-   CloseHandle(m_hWallPaperLoaderThread);
-}
-
-DWORD WINAPI WallPaper::WallPaperLoader::ThreadProc(LPVOID lpParameter)
-{
-   WallPaperLoader * self = (WallPaperLoader *)lpParameter;
-   HANDLE handles[2] = { self->m_hQueueSem, self->m_hStopThread };
-   TCHAR tempPath[MAX_PATH-14];
-   bool changed = false;
-
-   GetTempPath(MAX_PATH-14, tempPath);
-
-   while(WaitForMultipleObjects( 2, handles, FALSE, INFINITE) == WAIT_OBJECT_0)
+   switch(m_mode)
    {
-      WaitForSingleObject(self->m_hQueueMutex, INFINITE);
-      WallPaper * wallpaper = self->m_WallPapersQueue.front();
-      self->m_WallPapersQueue.pop_front();
-      ReleaseMutex(self->m_hQueueMutex);
-
-		if (changed || !wallpaper->m_useDefaultWallpaper)
-		{
-		   //TODO: for default wallpaper, we should now check if it has not changed
-			changed = !wallpaper->m_useDefaultWallpaper;
-
-			if (wallpaper->m_bmpFileName)
-			{
-				if (wallpaper == m_activeWallPaper)
-					SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, wallpaper->m_bmpFileName, 0);
-			}
-			else if (wallpaper->m_fileName)
-			{
-				if (strnicmp(wallpaper->m_fileName + strlen(wallpaper->m_fileName)-4, ".bmp", 4) == 0)
-				{
-					wallpaper->m_bmpFileName = wallpaper->m_fileName;
-
-					if (wallpaper == m_activeWallPaper)
-						SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, wallpaper->m_bmpFileName, 0);
-				}
-				else
-				{
-					IPicture * picture = PlatformHelper::OpenImage(wallpaper->m_fileName);
-					if (!picture)
-					{
-						wallpaper->m_fileName = NULL;
-						continue;
-					}
-
-					wallpaper->m_bmpFileName = new TCHAR[MAX_PATH];
-					if ( (GetTempFileName(tempPath, "VDIMG", 0, wallpaper->m_bmpFileName) == 0) ||
-						  (!PlatformHelper::SaveAsBitmap(picture, wallpaper->m_bmpFileName)) )
-					{
-						delete wallpaper->m_bmpFileName;
-						wallpaper->m_bmpFileName = NULL;
-						picture->Release();
-						continue;
-					}
-
-					if (wallpaper == m_activeWallPaper)
-						SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, wallpaper->m_bmpFileName, 0);
-
-					picture->Release();
-				}
-			}
-			else
-				SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, (void*)"", 0);
-		}
-
-      // Set the background color
-      BackgroundColor::GetInstance().SetColor(wallpaper->m_bkColor);
+   case WP_DEFAULT:  request.action = WallPaperApplier::Request::SET_DEFAULT;  break;
+   case WP_NONE:     request.action = WallPaperApplier::Request::SET_NONE;     break;
+   case WP_IMAGE:    request.action = WallPaperApplier::Request::SET_IMAGE;    break;
    }
+   request.fileName = m_fileName;
+   request.color = m_bkColor;
 
-   ExitThread(0);
-}
-
-void WallPaper::WallPaperLoader::LoadImageAsync(WallPaper * wallpaper)
-{
-   WaitForSingleObject(m_hQueueMutex, INFINITE);
-   m_WallPapersQueue.push_back(wallpaper);
-   ReleaseMutex(m_hQueueMutex);
-
-   ReleaseSemaphore(m_hQueueSem, 1, NULL);
+   WallPaperApplier::GetInstance().Post(request);
 }

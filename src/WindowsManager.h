@@ -24,6 +24,7 @@
 #include <map>
 #include <vector>
 #include <list>
+#include <set>
 #include "Desktop.h"
 #include "Window.h"
 #include "ShellHook.h"
@@ -31,16 +32,25 @@
 #include "HotkeyConfig.h"
 #include "BalloonNotif.h"
 
-using namespace std;
-
 #define FIRST_WINDOW_MANAGER_TIMER     100
 #define DELAYED_UPDATE_DELAY           1000 /*1sec*/
 
+/** Keeps track of the top-level windows which are managed by Virtual Dimension.
+ *
+ * The list of windows is maintained from the notifications of the system (WinEvents
+ * and shell hook). As the same changes trigger several notifications, and as the
+ * notifications caused by Virtual Dimension itself (when hiding/showing windows)
+ * must be told apart from the ones caused by the applications, the notifications
+ * only schedule a check of the window, which is performed a bit later. The check
+ * compares the actual state of the window with the state expected by Virtual
+ * Dimension.
+ */
 class WindowsManager
 {
 public:
    WindowsManager();
    ~WindowsManager(void);
+
    void PopulateInitialWindowsSet();
 
    void MoveWindow(HWND hWnd, Desktop* desk);
@@ -56,55 +66,96 @@ public:
    Iterator LastWindow()                    { return m_windows.last(); }
 
    Window * GetForegroundWindow();
+
+   /** Get the most recently activated window of a desktop, if any. */
+   Window * GetTopWindow(Desktop * desk);
+
    bool IsAutoSwitchDesktop() const         { return m_autoSwitch; }
    void SetAutoSwitchDesktop(bool autoSw)   { m_autoSwitch = autoSw; }
+
    bool IsShowAllWindowsInTaskList() const  { return m_allWindowsInTaskList; }
    void ShowAllWindowsInTaskList(bool all)  { m_allWindowsInTaskList = all; }
-   bool IsIntegrateWithShell() const        { return m_integrateWithShell; }
-   void SetIntegrateWithShell(bool integ);
 
    HWND GetPrevWindow(Window * wnd);
 
    void EnableAnimations();
    void DisableAnimations();
 
-   void RemoveWindow(Window * win)          { OnWindowDestroyed(*win); }
+   void RemoveWindow(Window * win);
 
    void ScheduleDelayedUpdate(Window * win);
    void CancelDelayedUpdate(Window * win);
 
+   /** Show all the windows hidden by Virtual Dimension.
+    * Used as a last resort, when the program crashes.
+    */
+   void EmergencyRestore();
+
+   /** Tell if a window should be managed by Virtual Dimension. */
+   static bool IsCandidateWindow(HWND hWnd);
+
+   LRESULT OnSettingsChange(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+
 protected:
    map<HWND, WindowsList::Node*> m_HWNDMap;
    WindowsList m_windows;
-
    list<Window*> m_zorder;
 
    typedef map<HWND, WindowsList::Node*>::iterator HWNDMapIterator;
    typedef list<Window*>::iterator ZOrderIterator;
 
    ShellHook m_shellhook;
+
    bool m_confirmKill;
    bool m_autoSwitch;
    bool m_allWindowsInTaskList;
-   bool m_integrateWithShell;
-
    int m_iAnimate;
    LONG m_nbDisabledAnimations;
 
-   LRESULT OnSettingsChange(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnStartOnDesktop(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   Window * AddWindow(HWND hWnd);
+   Window * FindWindowOrOwner(HWND hWnd);
+
+   LRESULT OnStartOnDesktop(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnCopyData(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+   // Programs started from the command line, which windows must go to some desktop
+   //**************************************************************************
+   struct StartRequest
+   {
+      DWORD processId;
+      int desktop;
+      std::wstring program;
+      ULONGLONG deadline;
+   };
+   std::vector<StartRequest> m_startRequests;
+
+   void AddStartRequest(DWORD processId, int desktop, LPCWSTR program);
+   void ApplyStartRequests(Window * win);
    LRESULT OnShellHookMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnWindowSizeMove(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-   void OnWindowCreated(HWND hWnd);       //window has just been created
-   void OnWindowDestroyed(HWND hWnd);     //window is going to be destroyed
+
    void OnWindowActivated(HWND hWnd);     //activation changed to another window
-   void OnGetMinRect(HWND hWnd);          //window minimized/maximized
-   void OnRedraw(HWND hWnd);              //window's title changed
-   void OnSysMenu()                       { return; } //???
-   void OnEndTask()                       { return; } //???
-   void OnWindowReplaced(HWND)            { return; } //window has been replaced
-   void OnWindowReplacing(HWND)           { return; } //window is being replaced
+   void OnRedraw(HWND hWnd);              //window's title/icon changed
    void OnWindowFlash(HWND hWnd);         //window is flashing
+
+   // Window events
+   //**************************************************************************
+   std::vector<HWINEVENTHOOK> m_winEventHooks;
+   std::set<HWND> m_pendingChecks;        //windows which state should be checked
+   bool m_layoutChanged;                  //preview window layout must be refreshed
+   UINT_PTR m_checkTimer;
+   bool m_checkTimerSet;
+
+   void InstallWinEventHooks();
+   void RemoveWinEventHooks();
+   static void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND hWnd,
+                                     LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime);
+   void OnWinEvent(DWORD event, HWND hWnd);
+
+   void ScheduleCheck(HWND hWnd);
+   void ScheduleLayoutUpdate();
+   void StartCheckTimer();
+   LRESULT OnCheckTimer(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   void CheckWindow(HWND hWnd);
 
    // Delayed window update
    //**************************************************************************
@@ -123,49 +174,49 @@ protected:
    {
    public:
       virtual void OnHotkey();
-      virtual LPCSTR GetName() const	{ return "Move window to next desk"; }
+      virtual LPCWSTR GetName() const  { return L"Move window to next desk"; }
    };
 
    class MoveWindowToPrevDesktopEventHandler: public PersistentHotkey<Settings::MoveWindowToPreviousDesktopHotkey>
    {
    public:
       virtual void OnHotkey();
-      virtual LPCSTR GetName() const	{ return "Move window to previous desk"; }
+      virtual LPCWSTR GetName() const  { return L"Move window to previous desk"; }
    };
 
    class MoveWindowToDesktopEventHandler: public PersistentHotkey<Settings::MoveWindowToDesktopHotkey>
    {
    public:
       virtual void OnHotkey();
-      virtual LPCSTR GetName() const	{ return "Move window to some desk"; }
+      virtual LPCWSTR GetName() const  { return L"Move window to some desk"; }
    };
 
    class MaximizeHeightEventHandler: public PersistentHotkey<Settings::MaximizeHeightHotkey>
    {
    public:
       virtual void OnHotkey();
-      virtual LPCSTR GetName() const   { return "Maximize height"; }
+      virtual LPCWSTR GetName() const  { return L"Maximize height"; }
    };
 
    class MaximizeWidthEventHandler: public PersistentHotkey<Settings::MaximizeWidthHotkey>
    {
    public:
       virtual void OnHotkey();
-      virtual LPCSTR GetName() const   { return "Maximize width"; }
+      virtual LPCWSTR GetName() const  { return L"Maximize width"; }
    };
 
    class ToggleAlwaysOnTopEventHandler: public PersistentHotkey<Settings::AlwaysOnTopHotkey>
    {
    public:
-		virtual void OnHotkey();
-      virtual LPCSTR GetName() const   { return "Toggle always on top"; }
+      virtual void OnHotkey();
+      virtual LPCWSTR GetName() const  { return L"Toggle always on top"; }
    };
 
    class ToggleTransparencyEventHandler: public PersistentHotkey<Settings::TransparencyHotkey>
    {
    public:
       virtual void OnHotkey();
-      virtual LPCSTR GetName() const   { return "Toggle transparency"; }
+      virtual LPCWSTR GetName() const  { return L"Toggle transparency"; }
    };
 
    MoveWindowToNextDesktopEventHandler m_moveToNextDeskEH;

@@ -21,55 +21,51 @@
 #ifndef __WALLPAPER_H__
 #define __WALLPAPER_H__
 
-#include <list>
+#include <string>
 
-using namespace std;
-
+/** Wallpaper of a desktop.
+ * The wallpaper is changed asynchronously (it can take some time), by a worker
+ * thread. The wallpaper of Windows is only changed if some desktop uses a
+ * specific wallpaper; the original wallpaper is restored when switching to a
+ * desktop using the default wallpaper, and when the program ends.
+ */
 class WallPaper
 {
 public:
    WallPaper();
-   WallPaper(LPTSTR fileName);
    ~WallPaper(void);
 
+   /** Display this wallpaper. */
    void Activate();
-   void SetImage(LPTSTR fileName);
+   /** Display this wallpaper again, if it is the active one (eg, after explorer restarted). */
+   void Refresh();
+
+   /** Set the wallpaper.
+    * Path of the image to use, or an empty string for default wallpaper (the one of Windows),
+    * or NULL to disable the wallpaper.
+    */
+   void SetImage(LPCWSTR fileName);
    void SetColor(COLORREF bkColor);
 
-	static void RefreshDefaultWallpaper()	{ m_defaultWallpaperInit = false; LoadDefaultWallpaper(); }
-   static LPCTSTR GetDefaultWallpaper()   { return m_defaultWallpaper; }
+   /** Get the wallpaper of Windows (the one used for the default wallpaper). */
+   static LPCWSTR GetDefaultWallpaper();
+   /** The wallpaper of Windows may have been changed. */
+   static void RefreshDefaultWallpaper();
+
+   /** Restore the wallpaper of Windows, and stop the worker thread. */
+   static void Shutdown();
 
 protected:
-	bool m_useDefaultWallpaper;
-   LPTSTR m_fileName;
-   LPTSTR m_bmpFileName;
+   enum Mode { WP_DEFAULT, WP_NONE, WP_IMAGE };
 
+   Mode m_mode;
+   std::wstring m_fileName;
    COLORREF m_bkColor;
 
-   class WallPaperLoader
-   {
-   public:
-      WallPaperLoader();
-      ~WallPaperLoader();
-      void LoadImageAsync(WallPaper * wallpaper);
-
-   protected:
-      static DWORD WINAPI ThreadProc(LPVOID lpParameter);
-
-      list<WallPaper *> m_WallPapersQueue;
-      HANDLE m_hStopThread;
-      HANDLE m_hQueueSem;
-      HANDLE m_hQueueMutex;
-      HANDLE m_hWallPaperLoaderThread;
-   };
-
-   static void LoadDefaultWallpaper();
+   void Apply();
 
    static WallPaper * m_activeWallPaper;
-   static WallPaperLoader m_wallPaperLoader;
-
-   static bool m_defaultWallpaperInit;
-   static TCHAR m_defaultWallpaper[MAX_PATH];
+   static std::wstring m_defaultWallpaper;
 };
 
 #endif /*__WALLPAPER_H__*/

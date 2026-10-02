@@ -1,19 +1,19 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
@@ -37,7 +37,7 @@ Desktop::DesktopProperties::~DesktopProperties()
 {
    //Free the image, if any
    if (m_picture)
-      m_picture->Release();
+      DeleteObject(m_picture);
 }
 
 void Desktop::DesktopProperties::InitDialog(HWND hDlg)
@@ -54,7 +54,7 @@ void Desktop::DesktopProperties::InitDialog(HWND hDlg)
 
    //Setup the desktop's name
    hWnd = GetDlgItem(hDlg, IDC_NAME);
-   SendMessage(hWnd, EM_LIMITTEXT, (WPARAM)sizeof(m_desk->m_name), (LPARAM)0);
+   SendMessage(hWnd, EM_LIMITTEXT, (WPARAM)(DESKTOP_NAME_LENGTH-1), (LPARAM)0);
    SendMessage(hWnd, WM_SETTEXT, 0, (LPARAM)m_desk->GetText());
 
    SendDlgItemMessage(hDlg, IDC_HOTKEY, HKM_SETHOTKEY, (WPARAM)m_desk->GetHotkey(), 0);
@@ -66,8 +66,8 @@ void Desktop::DesktopProperties::InitDialog(HWND hDlg)
 bool Desktop::DesktopProperties::Apply(HWND hDlg)
 {
    //Change desktop name
-   TCHAR name[80];   
-   GetDlgItemText(hDlg, IDC_NAME, name, sizeof(name));
+   wchar_t name[DESKTOP_NAME_LENGTH];
+   GetDlgItemText(hDlg, IDC_NAME, name, DESKTOP_NAME_LENGTH);
    m_desk->Rename(name);
 
    //Change wallpaper
@@ -88,12 +88,13 @@ bool Desktop::DesktopProperties::Apply(HWND hDlg)
 void Desktop::DesktopProperties::OnWallpaperChanged(HWND hDlg, HWND ctrl)
 {
    SendMessage(ctrl, WM_GETTEXT, MAX_PATH, (LPARAM)m_wallpaper);
-   if (m_picture)
-      m_picture->Release();
-   if (stricmp(m_wallpaper, DESKTOP_WALLPAPER_DEFAULT) == 0)
-      m_picture = PlatformHelper::OpenImage(WallPaper::GetDefaultWallpaper());
+      if (m_picture)
+      DeleteObject(m_picture);
+
+   if (_wcsicmp(m_wallpaper, DESKTOP_WALLPAPER_DEFAULT) == 0)
+      m_picture = PlatformHelper::LoadImageFile(WallPaper::GetDefaultWallpaper());
    else
-      m_picture = PlatformHelper::OpenImage(m_wallpaper);
+      m_picture = PlatformHelper::LoadImageFile(m_wallpaper);
    InvalidateRect(GetDlgItem(hDlg, IDC_PREVIEW), NULL, TRUE);
 
    //Enable the APPLY button
@@ -103,7 +104,7 @@ void Desktop::DesktopProperties::OnWallpaperChanged(HWND hDlg, HWND ctrl)
 void Desktop::DesktopProperties::OnBrowseWallpaper(HWND hDlg)
 {
    OPENFILENAME ofn;
-	String filter;
+   String filter;
 
    // Reset text if a special mode is selected, to let the dialog open properly.
    if (*m_wallpaper == '<')
@@ -115,9 +116,9 @@ void Desktop::DesktopProperties::OnBrowseWallpaper(HWND hDlg)
    ofn.hwndOwner = hDlg;
    ofn.lpstrFile = m_wallpaper;
    ofn.nMaxFile = MAX_PATH;
-	filter = Locale::GetInstance().GetString(IDS_PICTUREFILTER);
-	filter.Replace('|', 0);
-	ofn.lpstrFilter = filter;
+   filter = Locale::GetInstance().GetString(IDS_PICTUREFILTER);
+   std::replace(filter.begin(), filter.end(), L'|', L'\0');
+   ofn.lpstrFilter = filter.c_str();
    ofn.nFilterIndex = 1;
    ofn.lpstrFileTitle = NULL;
    ofn.nMaxFileTitle = 0;
@@ -138,9 +139,9 @@ void Desktop::DesktopProperties::OnChooseWallpaper(HWND hDlg)
    HMENU hPopupMenu = GetSubMenu(hMenu, 0);
 
    //Prepare the menu
-   if (stricmp(m_wallpaper, DESKTOP_WALLPAPER_DEFAULT)==0)
+   if (_wcsicmp(m_wallpaper, DESKTOP_WALLPAPER_DEFAULT)==0)
       CheckMenuItem(hPopupMenu, IDC_DEFAULT_WALLPAPER, MF_CHECKED|MF_BYCOMMAND);
-   else if (stricmp(m_wallpaper, DESKTOP_WALLPAPER_NONE)==0)
+   else if (_wcsicmp(m_wallpaper, DESKTOP_WALLPAPER_NONE)==0)
       CheckMenuItem(hPopupMenu, IDC_NO_WALLPAPER, MF_CHECKED|MF_BYCOMMAND);
    else
       CheckMenuItem(hPopupMenu, IDC_BROWSE_WALLPAPER, MF_CHECKED|MF_BYCOMMAND);
@@ -153,16 +154,14 @@ void Desktop::DesktopProperties::OnChooseWallpaper(HWND hDlg)
 
 void Desktop::DesktopProperties::OnPreviewDrawItem(LPDRAWITEMSTRUCT lpDrawItem)
 {
+   FillRect(lpDrawItem->hDC, &lpDrawItem->rcItem, GetSysColorBrush(COLOR_BTNFACE));
    if (m_picture)
-   {
-      PlatformHelper::CustomDrawIPicture(m_picture, lpDrawItem);
-   }
+      PlatformHelper::DrawBitmap(lpDrawItem->hDC, m_picture, lpDrawItem->rcItem, true);
    else
    {
-		LPTSTR text;
-		locGetString(text, IDS_NOIMAGE);
-      FillRect(lpDrawItem->hDC, &lpDrawItem->rcItem, GetSysColorBrush(COLOR_BTNFACE));
-      DrawText(lpDrawItem->hDC, text, -1, &lpDrawItem->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+      RECT rect = lpDrawItem->rcItem;
+      SetBkMode(lpDrawItem->hDC, TRANSPARENT);
+      DrawText(lpDrawItem->hDC, Locale::GetInstance().GetString(IDS_NOIMAGE), -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
    }
 }
 
@@ -204,7 +203,7 @@ void Desktop::DesktopProperties::ResetWallpaper(HWND hDlg)
 }
 
 // Message handler for the desktop properties dialog box.
-LRESULT CALLBACK Desktop::DeskProperties(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK Desktop::DeskProperties(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
    DesktopProperties * self;
 
@@ -231,8 +230,8 @@ LRESULT CALLBACK Desktop::DeskProperties(HWND hDlg, UINT message, WPARAM wParam,
          delete self;
 			EndDialog(hDlg, LOWORD(wParam)); //Return the last pressed button
 			return TRUE;
- 
-      case IDC_CHOOSE_WALLPAPER: 
+
+      case IDC_CHOOSE_WALLPAPER:
          if (HIWORD(wParam) == BN_CLICKED)
             self->OnChooseWallpaper(hDlg);
          else if (HIWORD(wParam) == BN_DOUBLECLICKED)
@@ -315,5 +314,5 @@ LRESULT CALLBACK Desktop::DeskProperties(HWND hDlg, UINT message, WPARAM wParam,
 
 bool Desktop::Configure(HWND hDlg)
 {
-	return DialogBoxParam(Locale::GetInstance(), MAKEINTRESOURCE(IDD_DESKTOPPROPS), hDlg, (DLGPROC)&DeskProperties, (LPARAM)this) == IDOK;
+	return DialogBoxParam(Locale::GetInstance(), MAKEINTRESOURCE(IDD_DESKTOPPROPS), hDlg, &DeskProperties, (LPARAM)this) == IDOK;
 }

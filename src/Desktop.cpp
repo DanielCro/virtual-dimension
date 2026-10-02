@@ -20,8 +20,6 @@
 
 #include "StdAfx.h"
 #include "Desktop.h"
-#include <string>
-#include <Shellapi.h>
 #include <assert.h>
 #include "WindowsManager.h"
 #include "DesktopManager.h"
@@ -32,28 +30,27 @@
 
 Desktop::Desktop(int i)
 {
-	char * basename;
-
    m_active = false;
+   m_index = i;
    m_hotkey = 0;
    m_rect.bottom = m_rect.left = m_rect.right = m_rect.top = 0;
-   strcpy(m_wallpaperFile, DESKTOP_WALLPAPER_DEFAULT);
+   wcscpy_s(m_wallpaperFile, DESKTOP_WALLPAPER_DEFAULT);
    m_bkColor = GetSysColor(COLOR_DESKTOP);
 
    m_wallpaper.SetImage(FormatWallpaper(m_wallpaperFile));
    m_wallpaper.SetColor(m_bkColor);
 
-	locGetString(basename, IDS_DESKTOP_BASENAME);
-   sprintf(m_name, "%s%i", basename, i);
+   swprintf_s(m_name, L"%s%i", Locale::GetInstance().GetString(IDS_DESKTOP_BASENAME), i);
 }
 
 Desktop::Desktop(Settings::Desktop * desktop)
 {
-   desktop->GetName(m_name, sizeof(m_name));
-   desktop->LoadSetting(Settings::Desktop::DeskWallpaper, m_wallpaperFile, sizeof(m_wallpaperFile));
+   desktop->GetName(m_name, DESKTOP_NAME_LENGTH);
+   desktop->LoadSetting(Settings::Desktop::DeskWallpaper, m_wallpaperFile, MAX_PATH);
    m_index = desktop->LoadSetting(Settings::Desktop::DeskIndex);
    m_hotkey = desktop->LoadSetting(Settings::Desktop::DeskHotkey);
    m_bkColor = desktop->LoadSetting(Settings::Desktop::BackgroundColor);
+   m_rect.bottom = m_rect.left = m_rect.right = m_rect.top = 0;
 
    m_wallpaper.SetImage(FormatWallpaper(m_wallpaperFile));
    m_wallpaper.SetColor(m_bkColor);
@@ -91,6 +88,7 @@ HMENU Desktop::BuildMenu()
    HMENU hMenu;
    MENUITEMINFO mii;
    MENUINFO mi;
+   UINT index = 0;
 
    //Create the menu
    hMenu = CreatePopupMenu();
@@ -99,7 +97,7 @@ HMENU Desktop::BuildMenu()
    mi.cbSize = sizeof(MENUINFO);
    mi.fMask = MIM_STYLE;
    mi.dwStyle = MNS_CHECKORBMP;
-   PlatformHelper::SetMenuInfo(hMenu, &mi);
+   SetMenuInfo(hMenu, &mi);
 
    //Add the menu items
    mii.cbSize = sizeof(mii);
@@ -107,22 +105,16 @@ HMENU Desktop::BuildMenu()
 
    for(it = winMan->GetIterator(); it; it++)
    {
-      TCHAR buffer[50];
-      DWORD res;
       Window * win = it;
 
       if (!win->IsOnDesk(this))
          continue;
 
-      SendMessageTimeout(*win, WM_GETTEXT, (WPARAM)sizeof(buffer), (LPARAM)buffer, SMTO_ABORTIFHUNG, 50, &res);
-
-      mii.dwItemData = (DWORD)win->GetIcon();
-      mii.dwTypeData = buffer;
-      mii.cch = strlen(buffer);
-      mii.wID = WM_USER+(int)win;	//this is not really clean, and could theoretically overflow...  no real problem, though...
+      //The id is the index of the window among the ones of this desktop
+      mii.dwItemData = (ULONG_PTR)win->GetIcon();
+      mii.dwTypeData = (LPWSTR)win->GetText();
+      mii.wID = WM_USER + index++;
       mii.hbmpItem = HBMMENU_CALLBACK;
-
-		assert(mii.wID > WM_USER);
 
       InsertMenuItem(hMenu, (UINT)-1, TRUE, &mii);
    }
@@ -132,10 +124,22 @@ HMENU Desktop::BuildMenu()
 
 void Desktop::OnMenuItemSelected(HMENU /*menu*/, int cmdId)
 {
-   Window * win;
+   WindowsManager::Iterator it;
+   int index = cmdId - WM_USER;
 
-   win = (Window *)(cmdId-WM_USER);
-   win->Activate();
+   for(it = winMan->GetIterator(); it; it++)
+   {
+      Window * win = it;
+
+      if (!win->IsOnDesk(this))
+         continue;
+
+      if (index-- == 0)
+      {
+         win->Activate();
+         break;
+      }
+   }
 }
 
 void Desktop::resize(LPRECT rect)
@@ -153,6 +157,7 @@ void Desktop::UpdateLayout()
    tooltip->SetTool(this);
 
    WindowsManager::Iterator it;
+   int iconSize = vdWindow.GetIconSize();
    int x, y;
 
    x = m_rect.left;
@@ -167,16 +172,16 @@ void Desktop::UpdateLayout()
 
       rect.left = x;
       rect.top = y;
-      rect.right = x + 16;
-      rect.bottom = y + 16;
+      rect.right = x + iconSize;
+      rect.bottom = y + iconSize;
 
       tooltip->SetTool(win, &rect);
 
-      x += 16;
-      if (x > m_rect.right-15)
+      x += iconSize;
+      if (x > m_rect.right-iconSize)
       {
          x = m_rect.left;
-         y += 16;
+         y += iconSize;
       }
    }
 
@@ -185,12 +190,11 @@ void Desktop::UpdateLayout()
 
 void Desktop::Draw(HDC hDc)
 {
-   char buffer[20];
+   RECT rect = m_rect;
 
    //Print desktop name in the middle
-   sprintf(buffer, "%.19s", m_name);
    SetBkMode(hDc, TRANSPARENT);
-   DrawText(hDc, buffer, -1, &m_rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+   DrawTextW(hDc, m_name, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
    //Draw a frame around the desktop
    FrameRect(hDc, &m_rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
@@ -198,6 +202,7 @@ void Desktop::Draw(HDC hDc)
    //Draw icons for each window
    WindowsManager::Iterator it;
    list<Window*> obsoleteWindowsList;
+   int iconSize = vdWindow.GetIconSize();
    int x, y;
 
    x = m_rect.left;
@@ -220,13 +225,13 @@ void Desktop::Draw(HDC hDc)
 
       //Draw the window's icon
       hIcon = win->GetIcon();
-      DrawIconEx(hDc, x, y, hIcon, 16, 16, 0, NULL, DI_NORMAL);
+      DrawIconEx(hDc, x, y, hIcon, iconSize, iconSize, 0, NULL, DI_NORMAL);
 
-      x += 16;
-      if (x > m_rect.right-16)
+      x += iconSize;
+      if (x > m_rect.right-iconSize)
       {
          x = m_rect.left;
-         y += 16;
+         y += iconSize;
       }
    }
 
@@ -249,10 +254,18 @@ void Desktop::Draw(HDC hDc)
 Window* Desktop::GetWindowFromPoint(int X, int Y)
 {
    WindowsManager::Iterator it;
+   int iconSize = vdWindow.GetIconSize();
+   int columns;
    int index;
 
-   index = ((X - m_rect.left) / 16) +
-           ((m_rect.right-m_rect.left) / 16) * ((Y - m_rect.top) / 16);
+   if (X < m_rect.left || Y < m_rect.top || X >= m_rect.right || Y >= m_rect.bottom)
+      return NULL;
+
+   //Same layout as in Draw()
+   columns = std::max(1, (int)(m_rect.right - m_rect.left) / iconSize);
+   if ((X - m_rect.left) / iconSize >= columns)
+      return NULL;
+   index = ((X - m_rect.left) / iconSize) + columns * ((Y - m_rect.top) / iconSize);
 
    for(it = winMan->GetIterator(); it; it++)
    {
@@ -269,7 +282,7 @@ Window* Desktop::GetWindowFromPoint(int X, int Y)
    return NULL;
 }
 
-void Desktop::Rename(char * name)
+void Desktop::Rename(LPCWSTR name)
 {
    Settings settings;
    Settings::Desktop desktop(&settings, m_name);
@@ -278,7 +291,7 @@ void Desktop::Rename(char * name)
    desktop.Destroy();
 
    /* copy the new name */
-   strncpy(m_name, name, sizeof(m_name));
+   lstrcpynW(m_name, name, DESKTOP_NAME_LENGTH);
 }
 
 void Desktop::Remove()
@@ -315,77 +328,25 @@ void Desktop::Save()
    desktop.SaveSetting(Settings::Desktop::BackgroundColor, m_bkColor);
 }
 
-void Desktop::ShowWindowWorkerProc(void * lpParam)
-{
-   Window * win = (Window *)lpParam;
-
-   win->SetSwitching(true);
-
-   if (win->IsInTray())
-      trayManager->AddIcon(win);
-   else
-   {
-      win->ShowWindow();
-   }
-
-   win->SetSwitching(false);
-}
-
-void Desktop::HideWindowWorkerProc(void * lpParam)
-{
-   Window * win = (Window*)lpParam;
-
-   win->SetSwitching(true);
-
-   if (win->IsInTray())
-      trayManager->DelIcon(win);
-   else
-      win->HideWindow();
-
-   win->SetSwitching(false);
-}
-
-BOOL CALLBACK Desktop::ActivateTopWindowProc( HWND hWnd, LPARAM lParam ) {
-	HWND tmpOwner = hWnd;
-	HWND OwnerWindow = NULL;
-	Window * win;
-
-	if(!(GetWindowLong(hWnd, GWL_STYLE) & WS_VISIBLE) || (GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW))
-		return TRUE;
-
-	while((tmpOwner = ::GetWindow(tmpOwner, GW_OWNER)) != NULL)
-		OwnerWindow = tmpOwner;
-	if(OwnerWindow) {
-		if((GetWindowLong(OwnerWindow, GWL_STYLE) & WS_VISIBLE) && !(GetWindowLong(OwnerWindow, GWL_EXSTYLE) & WS_EX_TOOLWINDOW))
-			win = winMan->GetWindow(OwnerWindow);
-		else
-			return TRUE;
-	}
-	else
-		win = winMan->GetWindow(hWnd);
-	if(win && win->IsOnDesk((Desktop *)lParam)) {
-		SetForegroundWindow(hWnd);
-		return FALSE;
-	}
-	return TRUE;
-}
-
 void Desktop::Activate(void)
 {
-	bool WindowsOnThisDesk = false;
-
    WindowsManager::Iterator it;
+   Window * topWindow;
 
    m_active = true;
+   TRACE(L"Activating desktop %s", m_name);
 
    /* Set the wallpaper */
    m_wallpaper.Activate();
 
-   //This helps to ensure we can set the foreground window (theorical), and ensures we got the captions
-   //painted correctly (only one "active" window).
-	SetForegroundWindow(vdWindow);
+   //Activate our own window while the windows are shown/hidden, so that the system does
+   //not activate (one after the other) the windows which are being hidden.
+   SetForegroundWindow(vdWindow);
 
-	// Show/hide the windows
+   winMan->DisableAnimations();
+
+   //First show the windows of this desktop, then hide the other ones: the windows being
+   //hidden cover the ones being shown, which reduces flickering.
    for(it = winMan->GetIterator(); it; it++)
    {
       Window * win = it;
@@ -394,28 +355,46 @@ void Desktop::Activate(void)
       if (!win->CheckExists())
          continue;
 
-		if (win->IsMoving())
-		{
-			win->MoveToDesktop(this);
-		}
+      if (win->IsMoving())
+      {
+         //The window is being dragged: it follows the user on the new desktop
+         win->MoveToDesktop(this);
+      }
       else if (win->IsOnDesk(this))
       {
-      	HANDLE event;
-      	win->UnFlashWindow();
-      	if (!m_taskPool.UpdateJob(HideWindowWorkerProc, win, ShowWindowWorkerProc, win, &event))
-            m_taskPool.QueueJob(ShowWindowWorkerProc, win, &event);
-         WaitForSingleObject(event, 2000);
-			WindowsOnThisDesk = true;
-      }
-		else if(!win->IsHidden())
-      {
-         if (!m_taskPool.UpdateJob(ShowWindowWorkerProc, win, HideWindowWorkerProc, win))
-            m_taskPool.QueueJob(HideWindowWorkerProc, win);
+         win->UnFlashWindow();
+         win->SetSwitching(true);
+         if (win->IsInTray())
+            trayManager->AddIcon(win);
+         else
+            win->ShowWindow();
+         win->SetSwitching(false);
       }
    }
-	if(WindowsOnThisDesk) { //don't bother with all this if empty desktop
-		EnumWindows(ActivateTopWindowProc, (LPARAM)this);
-	}
+
+   for(it = winMan->GetIterator(); it; it++)
+   {
+      Window * win = it;
+
+      if (!win->CheckExists() || win->IsOnDesk(this))
+         continue;
+
+      win->SetSwitching(true);
+      if (win->IsInTray())
+         trayManager->DelIcon(win);
+      else
+         win->HideWindow();
+      win->SetSwitching(false);
+   }
+
+   winMan->EnableAnimations();
+
+   //Give the focus to the window which was active when this desktop was left
+   topWindow = winMan->GetTopWindow(this);
+   if (topWindow)
+      SetForegroundWindow(topWindow->GetOwnedWindow());
+   else if (!IsWindowVisible(vdWindow))
+      SetForegroundWindow(GetShellWindow());
 }
 
 void Desktop::Desactivate(void)
@@ -439,28 +418,31 @@ void Desktop::OnHotkey()
    deskMan->SwitchToDesktop(this);
 }
 
-LPTSTR Desktop::FormatWallpaper(LPTSTR fileName)
+/** Get the actual wallpaper to use for some wallpaper setting.
+ * @return "" for the default wallpaper, NULL for no wallpaper, or the path of the image.
+ */
+LPCWSTR Desktop::FormatWallpaper(LPWSTR fileName)
 {
-   LPTSTR res;
+   LPCWSTR res;
 
    if (*fileName == 0)
    {
-      strcpy(fileName, DESKTOP_WALLPAPER_DEFAULT);
-      res = "";
+      wcscpy_s(fileName, MAX_PATH, DESKTOP_WALLPAPER_DEFAULT);
+      res = L"";
    }
-   else if (stricmp(fileName, DESKTOP_WALLPAPER_NONE) == 0)
+   else if (_wcsicmp(fileName, DESKTOP_WALLPAPER_NONE) == 0)
       res = NULL;
-   else if (stricmp(fileName, DESKTOP_WALLPAPER_DEFAULT) == 0)
-      res = "";
+   else if (_wcsicmp(fileName, DESKTOP_WALLPAPER_DEFAULT) == 0)
+      res = L"";
    else
       res = fileName;
 
    return res;
 }
 
-void Desktop::SetWallpaper(LPCTSTR fileName)
+void Desktop::SetWallpaper(LPCWSTR fileName)
 {
-   strncpy(m_wallpaperFile, fileName, sizeof(m_wallpaperFile)/sizeof(TCHAR));
+   lstrcpynW(m_wallpaperFile, fileName, MAX_PATH);
    m_wallpaper.SetImage(FormatWallpaper(m_wallpaperFile));
 }
 

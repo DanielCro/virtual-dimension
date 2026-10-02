@@ -22,30 +22,30 @@
 #define __WINDOW_H__
 
 #include "desktop.h"
-#include <shlobj.h>
 #include "TrayIconsManager.h"
 #include "Transparency.h"
 #include "AlwaysOnTop.h"
 #include "HidingMethod.h"
-#include "SharedMenuBuffer.h"
 #include "BalloonNotif.h"
 
 
 class Window: public ToolTip::Tool, public TrayIconsManager::TrayIconHandler, public AlwaysOnTop
 {
    friend class HidingMethod;
+   friend class HidingMethodHide;
+   friend class HidingMethodMinimize;
+   friend class HidingMethodMove;
 
 public:
    /** Constructor.
     * Builds a Window object from the handle of a window. Settings specific to this window are loaded
     * from registry, if any, and applied. Else, default settings are used.
-    * If shell integration is enabled, the window gets hooked at this time.
     */
    Window(HWND hWnd);
 
    /** Destructor.
-    * Performs cleanup: settings are saved to the registry if needed, the window is unhooked and
-    * memory/handles are released.
+    * Performs cleanup: settings are saved to the registry if needed, the window is shown again
+    * if it was hidden, and memory/handles are released.
     */
    virtual ~Window();
 
@@ -113,14 +113,12 @@ public:
     * @see OnMenuItemSelected
     */
    HMENU BuildMenu();
-   bool PrepareSysMenu(HANDLE filemapping);
    void OnMenuItemSelected(HMENU menu, int cmdId);
 
-   inline void ShowWindow();
-   inline void HideWindow();
-   inline bool IsHidden() const               { return m_hidden; }
-   inline bool CheckCreated();
-   inline bool CheckDestroyed();
+   void ShowWindow();
+   void HideWindow();
+   bool IsHidden() const                      { return m_hidden; }
+   HidingMethod * GetHidingMethod() const     { return m_hidingMethod; }
 
    bool IsMinimizeToTray() const              { return m_MinToTray; }
    void ToggleMinimizeToTray();
@@ -152,44 +150,60 @@ public:
    operator HWND()                            { return m_hWnd; }
 
    HICON GetIcon(void);
-   char * GetText()
+   void InvalidateIcon()                      { m_iconTime = 0; }
+   LPCWSTR GetText()
    {
-      GetWindowText(m_hWnd, m_name, sizeof(m_name)/sizeof(char));
+      GetWindowTextW(m_hWnd, m_name, sizeof(m_name)/sizeof(*m_name));
       return m_name;
    }
    void GetRect(LPRECT /*rect*/)  { return; }
 
-   void Hook();
-   void UnHook();
-
    inline HWND GetOwnedWindow() const         { return m_hOwnedWnd; }
    inline static HWND GetOwnedWindow(HWND hWnd);
 
-   inline bool IsSwitching() const            { return m_switching || m_hidingMethod->CheckSwitching(this); }
+   /** Tell if the window is being shown/hidden by Virtual Dimension.
+    * Changes are performed asynchronously for the windows which do not respond, and
+    * the corresponding notifications are received later, so the window state may not
+    * be up to date for some time.
+    */
+   inline bool IsSwitching() const            { return m_switching || HasPendingOperation(); }
    inline void SetSwitching(bool on)          { m_switching = on; }
+   bool HasPendingOperation() const;
 
-	inline bool IsMoving() const					 { return m_moving; }
-	inline void SetMoving(bool moving)			 { m_moving = moving; }
+   inline bool IsMoving() const               { return m_moving; }
+   inline void SetMoving(bool moving)         { m_moving = moving; }
 
    inline bool CheckExists() const            { return IsWindow(m_hWnd) != 0; }
 
    void OnDelayUpdate();
 
-   static void SetTag(HWND hWnd, int val)     { SetProp(hWnd, MAKEINTATOM(s_VDPropertyTag), (HANDLE)(val+1)); }
-   static void RemTag(HWND hWnd)              { RemoveProp(hWnd, MAKEINTATOM(s_VDPropertyTag)); }
-   static bool HasTag(HWND hWnd)              { return GetProp(hWnd, MAKEINTATOM(s_VDPropertyTag)) != NULL; }
-   static int GetTag(HWND hWnd)               { return (int)GetProp(hWnd, MAKEINTATOM(s_VDPropertyTag)) - 1; }
+   /** The window has been minimized by the user (or the application). */
+   void OnMinimized();
+   /** The window, hidden by Virtual Dimension, has been displayed by the application. */
+   void OnShownExternally();
+
+   static void SetTag(HWND hWnd, int val)     { SetPropW(hWnd, s_VDPropertyTag, (HANDLE)(INT_PTR)(val+1)); }
+   static void RemTag(HWND hWnd)              { RemovePropW(hWnd, s_VDPropertyTag); }
+   static bool HasTag(HWND hWnd)              { return GetPropW(hWnd, s_VDPropertyTag) != NULL; }
+   static int GetTag(HWND hWnd)               { return (int)(INT_PTR)GetPropW(hWnd, s_VDPropertyTag) - 1; }
 
    void FlashWindow(void);
    void UnFlashWindow(void);
    bool IsWindowFlashing(void)                { return m_BallonMsg ? true : false; }
 
+   /** Helpers for the hiding methods: change the window without blocking on unresponsive applications. */
+   bool IsResponsive() const                  { return m_responsive; }
+   void SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int x, int y, int cx, int cy, UINT flags);
+   void ShowWindowCmd(HWND hWnd, int cmd);
+   void HideOwnedPopups();
+   void ShowOwnedPopups();
+
 protected:
    LRESULT OnTrayIconMessage(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
    void OnContextMenu();
    void InsertMenuItem(HMENU menu, bool checked, HANDLE bmp, UINT id, UINT uIdStr);
-	void InsertMenuInfo(SharedMenuBuffer& menuinfo, UINT id, UINT uIdStr, bool checked);
    HANDLE LoadBmpRes(int id);
+   void BeginOperation();
 
    enum AutoSettingsModes {
       ASS_DISABLED,
@@ -201,29 +215,23 @@ protected:
    void EraseSettings();
    void SaveSettings();
 
-   static LRESULT CALLBACK PropertiesProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
-
    void OnInitSettingsDlg(HWND hDlg);
    void OnApplySettingsBtn(HWND hDlg);
-   static LRESULT CALLBACK SettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+   static INT_PTR CALLBACK SettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
    void OnInitAutoSettingsDlg(HWND hDlg);
    void OnApplyAutoSettingsBtn(HWND hDlg);
    void OnUpdateAutoSettingsUI(HWND hDlg, AutoSettingsModes mode);
-   static LRESULT CALLBACK AutoSettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+   static INT_PTR CALLBACK AutoSettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
-   static LRESULT CALLBACK FilterSettingsProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
-
-   static void OnFlashBallonClick(BalloonNotification::Message msg, int data);
+   static void OnFlashBallonClick(BalloonNotification::Message msg, LPARAM data);
 
    HWND m_hWnd;
    HWND m_hOwnedWnd;
    Desktop * m_desk;
    bool m_MinToTray;
    bool m_iconic;
-   char m_name[255];
-   LONG_PTR m_style;
-   bool m_setStyle;
+   wchar_t m_name[256];
 
    Transparency m_transp;
    unsigned char m_transpLevel;
@@ -233,22 +241,27 @@ protected:
    bool m_autopos;
    bool m_autodesk;
 
-   TCHAR m_className[30];
-   HICON m_hIcon;
-   HICON m_hDefaulIcon;
+   wchar_t m_className[256];
+   HICON m_hIcon;          ///< Icon of the window (belongs to the process of the window, or is m_hOwnIcon)
+   HICON m_hOwnIcon;       ///< Icon created by Virtual Dimension, which must be destroyed
+   ULONGLONG m_iconTime;   ///< Time when the icon was retrieved
 
    BalloonNotification::Message m_BallonMsg;
 
-   HINSTANCE m_HookDllHandle;
    DWORD m_dwProcessId;
 
    bool m_switching;
-	bool m_moving;
+   bool m_moving;
 
    bool m_hidden;
    HidingMethod * m_hidingMethod;
-   int m_hidingMethodData;
-   HANDLE m_hHideMutex;		//used to prevent hiding & showing at the same time if switching quickly to a desktop and back to the first
+
+   // State used by the hiding methods
+   bool m_responsive;                     ///< Does the window respond to messages (evaluated for each show/hide)
+   ULONGLONG m_lastOperation;             ///< Time of the last show/hide operation
+   bool m_hiddenIconic;                   ///< Was the window minimized when it was hidden ?
+   POINT m_hiddenPos;                     ///< Position of the window before it was moved away
+   std::vector<HWND> m_hiddenPopups;      ///< Owned windows hidden along with this window
 
    static HidingMethodHide       s_hider_method;
    static HidingMethodMinimize   s_minimizer_method;
@@ -256,57 +269,13 @@ protected:
 
    static HidingMethod* s_hiding_methods[];
 
-   static const ATOM s_VDPropertyTag;
+   static const wchar_t s_VDPropertyTag[];
 };
 
 HWND Window::GetOwnedWindow(HWND hWnd)
 {
-   HWND owned = GetWindow(hWnd, 6/*GW_ENABLEDPOPUP*/);
+   HWND owned = GetWindow(hWnd, GW_ENABLEDPOPUP);
    return owned ? owned : hWnd;
-}
-
-void Window::ShowWindow()
-{
-   WaitForSingleObject(m_hHideMutex, INFINITE);
-   if (m_hidden)
-   {
-      m_hidingMethod->Show(this);
-      m_hidden = false;
-   }
-   ReleaseMutex(m_hHideMutex);
-}
-
-void Window::HideWindow()
-{
-   WaitForSingleObject(m_hHideMutex, INFINITE);
-   if (!m_hidden)
-   {
-      m_hidingMethod->Hide(this);
-      m_hidden = true;
-   }
-   ReleaseMutex(m_hHideMutex);
-}
-
-bool Window::CheckCreated()
-{
-   bool res;
-
-   WaitForSingleObject(m_hHideMutex, INFINITE);
-   res = m_hidingMethod->CheckCreated(this);
-   ReleaseMutex(m_hHideMutex);
-
-   return res;
-}
-
-bool Window::CheckDestroyed()
-{
-   bool res;
-
-   WaitForSingleObject(m_hHideMutex, INFINITE);
-   res = m_hidingMethod->CheckDestroyed(this);
-   ReleaseMutex(m_hHideMutex);
-
-   return res;
 }
 
 #endif /*__WINDOW_H__*/

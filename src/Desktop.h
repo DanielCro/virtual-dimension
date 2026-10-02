@@ -24,18 +24,17 @@
 #include <list>
 #include "settings.h"
 #include "tooltip.h"
-#include <wininet.h>
-#include <shlobj.h>
-#include <ocidl.h>
 #include "HotKeyManager.h"
 #include "WallPaper.h"
-#include "TaskPool.h"
 
 using namespace std;
+
 class Window;
 
-#define DESKTOP_WALLPAPER_DEFAULT   "<default>"
-#define DESKTOP_WALLPAPER_NONE      "<none>"
+#define DESKTOP_WALLPAPER_DEFAULT   L"<default>"
+#define DESKTOP_WALLPAPER_NONE      L"<none>"
+
+#define DESKTOP_NAME_LENGTH         80
 
 class Desktop: public ToolTip::Tool, HotKeyManager::EventHandler
 {
@@ -52,7 +51,7 @@ public:
    void UpdateLayout();
    Window* GetWindowFromPoint(int x, int y);
 
-   void Rename(char * name);
+   void Rename(LPCWSTR name);
    void Remove();
    void Save();
 
@@ -66,48 +65,41 @@ public:
    void SetIndex(int index)   { m_index = index; }
    int GetIndex() const       { return m_index; }
 
-   LPTSTR GetWallpaper()      { return m_wallpaperFile; }
-   void SetWallpaper(LPCTSTR fileName);
-   void RefreshWallpaper()    { m_wallpaper.Activate(); }
-   static LPTSTR FormatWallpaper(LPTSTR fileName);
+   LPCWSTR GetWallpaper()     { return m_wallpaperFile; }
+   void SetWallpaper(LPCWSTR fileName);
+   void RefreshWallpaper()    { m_wallpaper.Refresh(); }
+   static LPCWSTR FormatWallpaper(LPWSTR fileName);
 
    COLORREF GetBackgroundColor() const   { return m_bkColor; }
    void SetBackgroundColor(COLORREF col);
 
-   char * GetText()           { return m_name; }
+   LPCWSTR GetText()          { return m_name; }
    void GetRect(LPRECT rect)  { *rect = m_rect; }
 
    static bool deskOrder(Desktop * first, Desktop * second);
 
    bool Configure(HWND hDlg);
 
-   static BOOL CALLBACK ActivateTopWindowProc( HWND hWnd, LPARAM lParam );
 protected:
    void OnHotkey();
 
-   static LRESULT CALLBACK DeskProperties(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
-
-   static void ShowWindowWorkerProc(LPVOID lpParam);
-   static void HideWindowWorkerProc(LPVOID lpParam);
+   static INT_PTR CALLBACK DeskProperties(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
    bool m_active;
-
    int m_index;
-   char m_name[80];
+   wchar_t m_name[DESKTOP_NAME_LENGTH];
    int m_hotkey;
    RECT m_rect;
-
    WallPaper m_wallpaper;
-   TCHAR m_wallpaperFile[MAX_PATH];
+   wchar_t m_wallpaperFile[MAX_PATH];
    COLORREF m_bkColor;
-
-   TaskPool m_taskPool;
 
    class DesktopProperties
    {
    public:
       DesktopProperties(Desktop * desktop);
       ~DesktopProperties();
+
       void InitDialog(HWND hDlg);
       bool Apply(HWND hDlg);
       void OnWallpaperChanged(HWND hDlg, HWND ctrl);
@@ -120,8 +112,8 @@ protected:
 
    protected:
       Desktop * m_desk;
-      IPicture * m_picture;
-      TCHAR m_wallpaper[MAX_PATH];
+      HBITMAP m_picture;
+      wchar_t m_wallpaper[MAX_PATH];
       COLORREF m_bgColor;
    };
 };

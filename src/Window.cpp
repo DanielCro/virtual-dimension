@@ -19,21 +19,24 @@
  */
 
 #include "StdAfx.h"
-#include "window.h"
+#include "Window.h"
 #include "VirtualDimension.h"
 #include "movewindow.h"
-#include <Shellapi.h>
 #include "PlatformHelper.h"
-#include "window.h"
 #include "ExplorerWrapper.h"
 #include "DesktopManager.h"
 #include "WindowsManager.h"
-#include "SharedMenuBuffer.h"
-#include "HookDLL.h"
+#include "Messages.h"
 #include "Locale.h"
 
-HINSTANCE HookWindow(HWND hWnd, DWORD dwProcessId, int data);
-bool UnHookWindow(HINSTANCE hInstance, DWORD dwProcessId, HWND hWnd);
+/** Time during which a window is considered as being changed after a show/hide
+ * operation: the notifications received during that time are caused by Virtual
+ * Dimension itself.
+ */
+#define PENDING_OPERATION_DELAY  1000
+
+/** Delay after which the icon of a window is retrieved again. */
+#define ICON_REFRESH_DELAY       5000
 
 HidingMethodHide       Window::s_hider_method;
 HidingMethodMinimize   Window::s_minimizer_method;
@@ -46,37 +49,48 @@ HidingMethod* Window::s_hiding_methods[] =
    &s_mover_method
 };
 
-const ATOM Window::s_VDPropertyTag = GlobalAddAtom("ViRtUaL DiMeNsIoN rocks !");
+const wchar_t Window::s_VDPropertyTag[] = L"ViRtUaL DiMeNsIoN rocks !";
 
 
 Window::Window(HWND hWnd): AlwaysOnTop(hWnd), m_hWnd(hWnd), m_hOwnedWnd(GetOwnedWindow(hWnd)),
-                           m_MinToTray(false), m_style(0), m_transp(m_hOwnedWnd), m_transpLevel(128),
+                           m_MinToTray(false), m_iconic(false), m_transp(m_hOwnedWnd), m_transpLevel(128),
                            m_autoSaveSettings(false), m_autosize(false), m_autopos(false), m_autodesk(false),
-                            m_hIcon(NULL), m_hDefaulIcon(NULL), m_BallonMsg(NULL), m_HookDllHandle(NULL),
-                           m_switching(false), m_moving(false), m_hidden(false)
+                           m_hIcon(NULL), m_hOwnIcon(NULL), m_iconTime(0), m_BallonMsg(NULL), m_dwProcessId(0),
+                           m_switching(false), m_moving(false), m_hidden(false),
+                           m_responsive(true), m_lastOperation(0), m_hiddenIconic(false)
 {
    Settings s;
    Settings::Window settings(&s);
    unsigned int method;
+   bool recovering = HasTag(hWnd);
+
+   *m_name = 0;
+   m_hiddenPos.x = m_hiddenPos.y = 0;
+   GetWindowThreadProcessId(m_hWnd, &m_dwProcessId);
 
    //Try to see if there are some special settings for this window
-   GetClassName(m_hWnd, m_className, sizeof(m_className)/sizeof(TCHAR));
+   GetClassNameW(m_hWnd, m_className, sizeof(m_className)/sizeof(*m_className));
    OpenSettings(settings, false);
 
    //Setup the hiding method to use (try to restore from tag, if present)
-   m_hHideMutex = CreateMutex(NULL, FALSE, NULL);
-   if (!HasTag(hWnd))
+   if (!recovering)
    {
-      TCHAR filename[MAX_PATH];
+      wchar_t filename[MAX_PATH];
       PlatformHelper::GetWindowFileName(m_hWnd, filename, MAX_PATH);
       method = s.LoadHidingMethod(filename);
    }
    else
       method = GetTag(hWnd);
-   if (method > sizeof(s_hiding_methods)/sizeof(*s_hiding_methods))
+   if (method >= sizeof(s_hiding_methods)/sizeof(*s_hiding_methods))
       method = 0;
    m_hidingMethod = s_hiding_methods[method];
-   m_hidingMethod->Attach(this);
+
+   //If the window was managed by a previous instance (which may have crashed), make sure it is visible
+   if (recovering)
+   {
+      m_responsive = PlatformHelper::IsWindowResponsive(m_hWnd);
+      m_hidingMethod->Recover(this);
+   }
 
    //Tag the window, to remember the window was managed by VD (in case of crash). It also tracks the hidding method used
    SetTag(hWnd, method);
@@ -85,10 +99,16 @@ Window::Window(HWND hWnd): AlwaysOnTop(hWnd), m_hWnd(hWnd), m_hOwnedWnd(GetOwned
    m_desk = settings.LoadSetting(Settings::Window::OnAllDesktops) ? NULL : deskMan->GetCurrentDesktop();
 
    SetMinimizeToTray(settings.LoadSetting(Settings::Window::MinimizeToTray));
-   SetAlwaysOnTop(settings.LoadSetting(Settings::Window::AlwaysOnTop));
 
-   SetTransparencyLevel(settings.LoadSetting(Settings::Window::TransparencyLevel));
-   SetTransparent(settings.LoadSetting(Settings::Window::EnableTransparency));
+   //Only touch the always-on-top/transparency state if the user configured it for this window:
+   //some applications legitimately make their windows topmost.
+   if (settings.IsValid())
+   {
+      SetAlwaysOnTop(settings.LoadSetting(Settings::Window::AlwaysOnTop));
+
+      SetTransparencyLevel(settings.LoadSetting(Settings::Window::TransparencyLevel));
+      SetTransparent(settings.LoadSetting(Settings::Window::EnableTransparency));
+   }
 
    m_autoSaveSettings = settings.LoadSetting(Settings::Window::AutoSaveSettings);
    m_autosize = settings.LoadSetting(Settings::Window::AutoSetSize);
@@ -115,18 +135,17 @@ Window::~Window(void)
 {
    winMan->CancelDelayedUpdate(this);
 
-   UnHook();
-
-   if (m_hDefaulIcon)
-      DestroyIcon(m_hDefaulIcon);
+   UnFlashWindow();
 
    if (m_autoSaveSettings)
       SaveSettings();
 
-   if (m_hHideMutex)
-      CloseHandle(m_hHideMutex);
+   //Never leave a window hidden behind us
+   if (m_hidden && CheckExists())
+      ShowWindow();
 
-   m_hidingMethod->Detach(this);
+   if (m_hOwnIcon)
+      DestroyIcon(m_hOwnIcon);
 
    //Tag is not needed anymore
    RemTag(m_hWnd);
@@ -135,12 +154,10 @@ Window::~Window(void)
 /** Delay update callback.
  * This method is called as the final step in the delayed-update process. This process is used to
  * fix some issues when VD is called too early after a window has been created. Indeed, sometime
- * the owned window is not ready, thus the user would not get the VD menu, and many features would
- * not work (always on top, transparency...).
+ * the owned window is not ready, thus many features would not work (always on top, transparency...).
  * This function is thus called some time after the constructor (provided a call to
  * WindowManager::ScheduleDelayedUpdate() is made). It checks if the owned window has changed,
- * updates various parameters consequently, and in any case performs auto-size/position and shell
- * integration.
+ * updates various parameters consequently, and in any case performs auto-size/position.
  */
 void Window::OnDelayUpdate()
 {
@@ -158,16 +175,10 @@ void Window::OnDelayUpdate()
    //Auto-size/position
    OpenSettings(settings, false);
    if ( (m_autosize || m_autopos) && settings.LoadSetting(Settings::Window::WindowPosition, &rect) )
-      SetWindowPos(m_hOwnedWnd, 0,
-      rect.left, rect.top, rect.right-rect.left, rect.bottom-rect.top,
-      SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS |
-      (m_autopos?0:SWP_NOMOVE) | (m_autosize?0:SWP_NOSIZE));
-
-   //Shell integration
-   TCHAR filename[MAX_PATH];
-   PlatformHelper::GetWindowFileName(m_hWnd, filename, MAX_PATH);
-   if (winMan->IsIntegrateWithShell() && !s.LoadDisableShellIntegration(filename))
-      Hook();
+      ::SetWindowPos(m_hOwnedWnd, 0,
+                     rect.left, rect.top, rect.right-rect.left, rect.bottom-rect.top,
+                     SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS |
+                     (m_autopos?0:SWP_NOMOVE) | (m_autosize?0:SWP_NOSIZE));
 }
 
 void Window::MoveToDesktop(Desktop * desk)
@@ -217,39 +228,185 @@ bool Window::IsOnCurrentDesk() const
    return IsOnDesk(deskMan->GetCurrentDesktop());
 }
 
+void Window::ShowWindow()
+{
+   if (m_hidden)
+   {
+      BeginOperation();
+      m_hidingMethod->Show(this);
+      m_hidden = false;
+   }
+}
+
+void Window::HideWindow()
+{
+   if (!m_hidden)
+   {
+      BeginOperation();
+      m_hidingMethod->Hide(this);
+      m_hidden = true;
+   }
+}
+
+void Window::BeginOperation()
+{
+   //Hung applications are changed asynchronously, so that we do not hang as well
+   m_responsive = PlatformHelper::IsWindowResponsive(m_hWnd);
+   m_lastOperation = GetTickCount64();
+}
+
+bool Window::HasPendingOperation() const
+{
+   if (m_lastOperation == 0)
+      return false;
+
+   //Requests to an unresponsive window stay pending as long as it does not respond
+   return (GetTickCount64() - m_lastOperation < PENDING_OPERATION_DELAY) ||
+          (!m_responsive && IsHungAppWindow(m_hWnd));
+}
+
+void Window::SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int x, int y, int cx, int cy, UINT flags)
+{
+   if (!m_responsive)
+      flags |= SWP_ASYNCWINDOWPOS;
+   ::SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, flags);
+}
+
+void Window::ShowWindowCmd(HWND hWnd, int cmd)
+{
+   if (m_responsive)
+      ::ShowWindow(hWnd, cmd);
+   else
+      ::ShowWindowAsync(hWnd, cmd);
+}
+
+struct OwnedPopupsEnumInfo
+{
+   HWND hOwner;
+   std::vector<HWND> * popups;
+};
+
+static BOOL CALLBACK ListOwnedPopupsProc(HWND hWnd, LPARAM lParam)
+{
+   OwnedPopupsEnumInfo * info = (OwnedPopupsEnumInfo *)lParam;
+
+   if ( (hWnd != info->hOwner) &&
+        (IsWindowVisible(hWnd)) &&
+        (GetAncestor(hWnd, GA_ROOTOWNER) == info->hOwner) )
+      info->popups->push_back(hWnd);
+
+   return TRUE;
+}
+
+void Window::HideOwnedPopups()
+{
+   OwnedPopupsEnumInfo info = { m_hWnd, &m_hiddenPopups };
+
+   m_hiddenPopups.clear();
+   EnumWindows(ListOwnedPopupsProc, (LPARAM)&info);
+
+   for(HWND hWnd: m_hiddenPopups)
+      SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_HIDEWINDOW | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+void Window::ShowOwnedPopups()
+{
+   for(HWND hWnd: m_hiddenPopups)
+   {
+      if (IsWindow(hWnd) && GetAncestor(hWnd, GA_ROOTOWNER) == m_hWnd)
+         SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+   }
+   m_hiddenPopups.clear();
+}
+
+void Window::OnMinimized()
+{
+   //Emulate "minimize to tray": move the minimized window from the taskbar to the tray
+   if (!IsMinimizeToTray() || m_hidden || !IsOnCurrentDesk())
+      return;
+
+   m_iconic = true;
+   trayManager->AddIcon(this);
+   HideWindow();
+}
+
+void Window::OnShownExternally()
+{
+   Desktop * oldDesk = m_desk;
+
+   if (!m_hidden)
+      return;
+
+   //The application displayed the window again (eg, it was restored from its own
+   //notification icon): consider that the window now belongs to the current desktop.
+   if (IsInTray())
+      trayManager->DelIcon(this);
+   m_iconic = false;
+   m_hidden = false;
+   m_hiddenPopups.clear();
+
+   if (m_desk != NULL)
+   {
+      m_desk = deskMan->GetCurrentDesktop();
+      if (oldDesk != NULL && oldDesk != m_desk)
+         oldDesk->UpdateLayout();
+      m_desk->UpdateLayout();
+   }
+}
+
 HICON Window::GetIcon(void)
 {
-   if (GetObjectType(m_hIcon))
+   ULONGLONG now = GetTickCount64();
+   int size = vdWindow.GetIconSize();
+   bool isStoreApp;
+   HICON hIcon = NULL;
+   DWORD_PTR res;
+
+   if (m_hIcon && (now - m_iconTime < ICON_REFRESH_DELAY))
       return m_hIcon;
+   m_iconTime = now;
 
-   m_hIcon = NULL;
+   //Store applications are hosted in ApplicationFrameWindow, which has no icon of its own
+   isStoreApp = (wcscmp(m_className, L"ApplicationFrameWindow") == 0);
 
-   //Get normal icon
-	if (SendMessageTimeout(m_hWnd, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 100, (LPDWORD)&m_hIcon) &&
-       m_hIcon)
-      return m_hIcon;
+   if (!isStoreApp)
+   {
+      //Get the icon from the window
+      if (SendMessageTimeoutW(m_hWnd, WM_GETICON, size > 16 ? ICON_BIG : ICON_SMALL2, 0, SMTO_ABORTIFHUNG, 50, &res) && res)
+         hIcon = (HICON)res;
+      else if (SendMessageTimeoutW(m_hWnd, WM_GETICON, ICON_SMALL, 0, SMTO_ABORTIFHUNG, 50, &res) && res)
+         hIcon = (HICON)res;
+      else if (SendMessageTimeoutW(m_hWnd, WM_GETICON, ICON_BIG, 0, SMTO_ABORTIFHUNG, 50, &res) && res)
+         hIcon = (HICON)res;
 
-   //Get drag icon
-   if (SendMessageTimeout(m_hWnd, WM_QUERYDRAGICON, 0, 0, SMTO_ABORTIFHUNG, 100, (LPDWORD)&m_hIcon) &&
-       m_hIcon)
-      return m_hIcon;
+      //Get class icon
+      if (!hIcon)
+         hIcon = (HICON)GetClassLongPtrW(m_hWnd, GCLP_HICONSM);
+      if (!hIcon)
+         hIcon = (HICON)GetClassLongPtrW(m_hWnd, GCLP_HICON);
+   }
 
-   //Get class icon
-   m_hIcon = (HICON) GetClassLong( m_hWnd, GCL_HICONSM );
-   if (m_hIcon)
-      return m_hIcon;
+   if (hIcon)
+      return m_hIcon = hIcon;
 
-   //Return default icon
-   if (m_hDefaulIcon)
-      return m_hDefaulIcon;
+   //No icon from the window: build one (only once)
+   if (!m_hOwnIcon)
+   {
+      m_hOwnIcon = PlatformHelper::GetAppIconForWindow(m_hWnd, size);
 
-   //No default icon yet: get it from application file, or use generic default icon
-   TCHAR lpFileName[256];
-   PlatformHelper::GetWindowFileName(m_hWnd, lpFileName, 256);
-   if (!ExtractIconEx(lpFileName, 0, NULL, &m_hDefaulIcon, 1))
-      m_hDefaulIcon = (HICON) LoadImage(vdWindow, MAKEINTRESOURCE(IDI_DEFAPP_SMALL), IMAGE_ICON, 16, 16, LR_SHARED);
+      if (!m_hOwnIcon)
+      {
+         wchar_t fileName[MAX_PATH];
+         if (PlatformHelper::GetWindowFileName(m_hWnd, fileName, MAX_PATH))
+            ExtractIconExW(fileName, 0, NULL, &m_hOwnIcon, 1);
+      }
+   }
 
-   return m_hDefaulIcon;
+   if (m_hOwnIcon)
+      return m_hIcon = m_hOwnIcon;
+
+   //Use generic default icon
+   return m_hIcon = (HICON)LoadImage(vdWindow, MAKEINTRESOURCE(IDI_DEFAPP_SMALL), IMAGE_ICON, 16, 16, LR_SHARED);
 }
 
 void Window::InsertMenuItem(HMENU menu, bool checked, HANDLE bmp, UINT id, UINT uIdStr)
@@ -258,19 +415,12 @@ void Window::InsertMenuItem(HMENU menu, bool checked, HANDLE bmp, UINT id, UINT 
 
    mii.cbSize = sizeof(MENUITEMINFO);
    mii.fMask = MIIM_DATA | MIIM_BITMAP | MIIM_ID | MIIM_STRING | MIIM_STATE;
-   mii.hbmpItem = (int)bmp <= 11 ? (HBITMAP)bmp : HBMMENU_CALLBACK;
+   mii.hbmpItem = (INT_PTR)bmp <= 11 ? (HBITMAP)bmp : HBMMENU_CALLBACK;   //HBMMENU_xxx values are 1 to 11
    mii.dwItemData = (ULONG_PTR)bmp;
    mii.wID = id;
-	locGetString(mii.dwTypeData, uIdStr);
+   locGetString(mii.dwTypeData, uIdStr);
    mii.fState = checked ? MFS_CHECKED : MFS_UNCHECKED;
    ::InsertMenuItem(menu, (UINT)-1, TRUE, &mii);
-}
-
-void Window::InsertMenuInfo(SharedMenuBuffer& menuinfo, UINT id, UINT uIdStr, bool checked)
-{
-	char * text;
-	locGetString(text, uIdStr);
-	menuinfo.InsertMenu(id, text, checked);
 }
 
 HANDLE Window::LoadBmpRes(int id)
@@ -290,13 +440,12 @@ HMENU Window::BuildMenu()
    mi.cbSize = sizeof(MENUINFO);
    mi.fMask = MIM_STYLE;
    mi.dwStyle = MNS_CHECKORBMP;
-   PlatformHelper::SetMenuInfo(hMenu, &mi);
+   SetMenuInfo(hMenu, &mi);
 
    //Now add the items
    InsertMenuItem(hMenu, IsAlwaysOnTop(), NULL, VDM_TOGGLEONTOP, IDS_MENU_ALWAYSONTOP);
    InsertMenuItem(hMenu, IsMinimizeToTray(), NULL, VDM_TOGGLEMINIMIZETOTRAY, IDS_MENU_MINTOTRAY);
-   if (m_transp.IsTransparencySupported())
-      InsertMenuItem(hMenu, m_transp.GetTransparencyLevel() != 255, NULL, VDM_TOGGLETRANSPARENCY, IDS_MENU_TRANSPARENT);
+   InsertMenuItem(hMenu, IsTransparent(), NULL, VDM_TOGGLETRANSPARENCY, IDS_MENU_TRANSPARENT);
    AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
 
    InsertMenuItem(hMenu, IsOnAllDesktops(), NULL, VDM_TOGGLEALLDESKTOPS, IDS_MENU_ONALLDESKTOPS);
@@ -321,27 +470,6 @@ HMENU Window::BuildMenu()
    InsertMenuItem(hMenu, false, NULL, VDM_PROPERTIES, IDS_MENU_WNDPROPERTIES);
 
    return hMenu;
-}
-
-bool Window::PrepareSysMenu(HANDLE filemapping)
-{
-   SharedMenuBuffer menuinfo(m_dwProcessId, filemapping);
-
-   InsertMenuInfo(menuinfo, VDM_TOGGLEONTOP, IDS_MENU_ALWAYSONTOP, IsAlwaysOnTop());
-   InsertMenuInfo(menuinfo, VDM_TOGGLEMINIMIZETOTRAY, IDS_MENU_MINTOTRAY, IsMinimizeToTray());
-   if (m_transp.IsTransparencySupported())
-      InsertMenuInfo(menuinfo, VDM_TOGGLETRANSPARENCY, IDS_MENU_TRANSPARENT, IsTransparent());
-   menuinfo.InsertSeparator();
-   InsertMenuInfo(menuinfo, VDM_TOGGLEALLDESKTOPS, IDS_MENU_ONALLDESKTOPS, IsOnAllDesktops());
-   Desktop * desk = deskMan->GetFirstDesktop();
-   int i = 0;
-   while(desk != NULL && menuinfo.InsertMenu(VDM_MOVETODESK+i++, desk->GetText(), GetDesk()==desk))
-      desk = deskMan->GetNextDesktop();
-   menuinfo.InsertSeparator();
-   InsertMenuInfo(menuinfo, VDM_MOVEWINDOW, IDS_MENU_CHANGEDESKTOP, false);
-   InsertMenuInfo(menuinfo, VDM_PROPERTIES, IDS_MENU_WNDPROPERTIES, false);
-
-   return true;
 }
 
 void Window::OnMenuItemSelected(HMENU /*menu*/, int cmdId)
@@ -403,11 +531,6 @@ void Window::OnMenuItemSelected(HMENU /*menu*/, int cmdId)
    case VDM_PROPERTIES:
       DisplayWindowProperties();
       break;
-
-   default:
-      if (cmdId >= VDM_MOVETODESK && cmdId < VDM_MOVETODESK+deskMan->GetNbDesktops())
-         MoveToDesktop(deskMan->GetDesktop(cmdId-VDM_MOVETODESK));
-      break;
    }
 }
 
@@ -415,15 +538,16 @@ void Window::SetMinimizeToTray(bool totray)
 {
    m_MinToTray = totray;
 
-   if (IsIconic() && IsOnCurrentDesk())
+   if (IsOnCurrentDesk())
    {
-      if (m_MinToTray)
+      if (m_MinToTray && ::IsIconic(m_hWnd) && !m_hidden)
       {
          // Move minimized icon from taskbar to tray
+         m_iconic = true;
          trayManager->AddIcon(this);
          HideWindow();
       }
-      else
+      else if (!m_MinToTray && m_hidden && m_iconic)
       {
          // Move minimized icon from tray to taskbar
          trayManager->DelIcon(this);
@@ -462,9 +586,8 @@ void Window::SetTransparent(bool transp)
 
 void Window::ToggleTransparent()
 {
-   //TODO: will need to be updated once all settings have been changed
    if (GetTransparencyLevel() == TRANSPARENCY_DISABLED && !IsTransparent())
-      SetTransparencyLevel(0xc0/*Settings::GetDefaultSetting(Settings::Window::TransparencyLevel)*/);
+      SetTransparencyLevel(Settings::GetDefaultSetting(Settings::Window::TransparencyLevel));
    SetTransparent(!IsTransparent());
 }
 
@@ -484,6 +607,8 @@ void Window::Activate()
 
    if (!IsOnCurrentDesk())
       deskMan->SwitchToDesktop(m_desk);
+
+   m_hOwnedWnd = GetOwnedWindow(m_hWnd);
    SetForegroundWindow(m_hOwnedWnd);
 }
 
@@ -495,17 +620,17 @@ void Window::Restore()
 
       if (IsOnCurrentDesk())
       {
-         if (IsMinimizeToTray())
+         if (IsMinimizeToTray() && m_hidden)
          {
             trayManager->DelIcon(this);
             ShowWindow();
          }
-         else
-            OpenIcon(m_hWnd);
+         if (::IsIconic(m_hWnd))
+            ::ShowWindowAsync(m_hWnd, SW_RESTORE);
       }
    }
    else if (IsZoomed(m_hWnd))
-      ::ShowWindow(m_hWnd, SW_RESTORE);
+      ::ShowWindowAsync(m_hWnd, SW_RESTORE);
 }
 
 void Window::Minimize()
@@ -514,44 +639,43 @@ void Window::Minimize()
    {
       if (IsMinimizeToTray())
       {
+         m_iconic = true;
          trayManager->AddIcon(this);
          HideWindow();
       }
       else
-         ::ShowWindow(m_hWnd, SW_MINIMIZE);
+         ::ShowWindowAsync(m_hWnd, SW_MINIMIZE);
    }
    m_iconic = true;
 }
 
 void Window::Maximize()
 {
-   ::ShowWindow(m_hWnd, SW_MAXIMIZE);
+   ::ShowWindowAsync(m_hWnd, SW_MAXIMIZE);
 }
 
 void Window::MaximizeHeight()
 {
    RECT rect;
-   RECT screen;
    HWND hWnd = GetOwnedWindow();
 
    GetWindowRect(hWnd, &rect);
-   SystemParametersInfo(SPI_GETWORKAREA, 0, &screen, 0);
-   MoveWindow( hWnd, rect.left, screen.top,
-               rect.right-rect.left, screen.bottom-screen.top,
-               TRUE);
+   RECT screen = PlatformHelper::GetWorkArea(hWnd);
+   ::SetWindowPos(hWnd, NULL, rect.left, screen.top,
+                  rect.right-rect.left, screen.bottom-screen.top,
+                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 }
 
 void Window::MaximizeWidth()
 {
    RECT rect;
-   RECT screen;
    HWND hWnd = GetOwnedWindow();
 
    GetWindowRect(hWnd, &rect);
-   SystemParametersInfo(SPI_GETWORKAREA, 0, &screen, 0);
-   MoveWindow( hWnd, screen.left, rect.top,
-               screen.right-screen.left, rect.bottom - rect.top,
-               TRUE);
+   RECT screen = PlatformHelper::GetWorkArea(hWnd);
+   ::SetWindowPos(hWnd, NULL, screen.left, rect.top,
+                  screen.right-screen.left, rect.bottom - rect.top,
+                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
 }
 
 void Window::Kill()
@@ -571,14 +695,14 @@ void Window::Kill()
 
 LRESULT Window::OnTrayIconMessage(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM lParam)
 {
-   switch(lParam)
+   switch(LOWORD(lParam))
    {
-   case WM_RBUTTONDOWN:
+   case WM_RBUTTONUP:
    case WM_CONTEXTMENU:
       OnContextMenu();
       break;
 
-   case WM_LBUTTONDOWN:
+   case WM_LBUTTONUP:
       OnMenuItemSelected(NULL, VDM_ACTIVATEWINDOW);
       break;
    }
@@ -589,7 +713,7 @@ LRESULT Window::OnTrayIconMessage(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wPar
 void Window::OnContextMenu()
 {
    HMENU hMenu;
-   HRESULT res;
+   int res;
    POINT pt;
 
    hMenu = BuildMenu();
@@ -600,40 +724,18 @@ void Window::OnContextMenu()
 
    if (res >= WM_USER)
       OnMenuItemSelected(hMenu, res);
-   else
+   else if (res)
       PostMessage(vdWindow, WM_COMMAND, res, 0);
 
    DestroyMenu(hMenu);
-}
-
-void Window::Hook()
-{
-   if (m_HookDllHandle)
-      return;
-
-   GetWindowThreadProcessId(m_hWnd, &m_dwProcessId);
-   m_HookDllHandle = HookWindow(m_hWnd, m_dwProcessId, (int)this);
-   if (m_HookDllHandle && m_hWnd != m_hOwnedWnd)
-      HookWindow(m_hOwnedWnd, m_dwProcessId, (int)this);
-}
-
-void Window::UnHook()
-{
-   if (m_HookDllHandle)
-   {
-      UnHookWindow(m_HookDllHandle, m_dwProcessId, m_hWnd);
-      if (m_hWnd != m_hOwnedWnd)
-         UnHookWindow(m_HookDllHandle, m_dwProcessId, m_hOwnedWnd);
-   }
-   m_HookDllHandle = NULL;
 }
 
 void Window::FlashWindow(void)
 {
    if (!IsOnCurrentDesk() && !IsWindowFlashing())
    {
-      m_BallonMsg = msgManager.Add("This window requires attention!\r\nClick here to activate it.",
-                                   GetText(), (int)GetIcon(), &OnFlashBallonClick, (int)m_hWnd);
+      m_BallonMsg = msgManager.Add(Locale::GetInstance().GetString(IDS_FLASH_MESSAGE),
+                                   GetText(), (INT_PTR)GetIcon(), &OnFlashBallonClick, (LPARAM)m_hWnd);
    }
 }
 
@@ -646,12 +748,12 @@ void Window::UnFlashWindow(void)
    }
 }
 
-void Window::OnFlashBallonClick(BalloonNotification::Message /*msg*/, int data)
+void Window::OnFlashBallonClick(BalloonNotification::Message /*msg*/, LPARAM data)
 {
    Window * wnd = winMan->GetWindow((HWND)data);
    if (wnd)
    {
-      wnd->UnFlashWindow();
+      wnd->m_BallonMsg = NULL;   //the balloon destroys itself
       wnd->Activate();
    }
 }

@@ -37,6 +37,9 @@ extern AlwaysOnTop * ontop;
 extern ToolTip * tooltip;
 extern MouseWarp * mousewarp;
 
+/** Class name of the main window, also used by a second instance to find the running one. */
+#define VD_WINDOW_CLASS    L"VIRTUALDIMENSION"
+
 class VirtualDimension: public FastWindow
 {
 public:
@@ -48,18 +51,22 @@ public:
    HMENU GetMenu() const  { return m_pSysMenu; }
    operator HINSTANCE()   { return m_hInstance; }
 
-   HWND FindWindow() const	  { return ::FindWindow(m_szWindowClass, m_szTitle); }
+   /** Find the main window of the running instance, if any. */
+   static HWND FindWindow()  { return ::FindWindowW(VD_WINDOW_CLASS, NULL); }
 
    inline void Refresh()  { InvalidateRect(m_hWnd, NULL, FALSE); }
 
-	inline int GetSnapSize() const		{ return m_snapSize; }
-	inline void SetSnapSize(int size)	{ m_snapSize = size; }
+   /** Size of the window icons in the preview window, for the current DPI. */
+   int GetIconSize() const  { return m_iconSize; }
 
-	int GetAutoHideDelay() const			{ return m_autoHideDelay; }
-	void SetAutoHideDelay(int delay)		{ m_autoHideDelay = delay; }
+   inline int GetSnapSize() const      { return m_snapSize; }
+   inline void SetSnapSize(int size)   { m_snapSize = size; }
 
-	void Shrink(void);
-	void UnShrink(void);
+   int GetAutoHideDelay() const        { return m_autoHideDelay; }
+   void SetAutoHideDelay(int delay)    { m_autoHideDelay = delay; }
+
+   void Shrink(void);
+   void UnShrink(void);
 
    bool IsPointInWindow(POINT pt);
 
@@ -68,32 +75,31 @@ protected:
    HCURSOR m_dragCursor;
 
    HMENU m_pSysMenu;
-	HMENU m_pLangMenu;
 
    HINSTANCE m_hInstance;
 
    static const int MAX_LOADSTRING = 100;
    TCHAR m_szTitle[MAX_LOADSTRING];
-   TCHAR m_szWindowClass[MAX_LOADSTRING];
    POINT m_location;
+   int m_iconSize;
 
-	enum DockPosition {
-		DOCK_LEFT	= 1,
-		DOCK_RIGHT	= 2,
-		DOCK_TOP		= 4,
-		DOCK_BOTTOM	= 8,
-	};
-	int m_dockedBorders;
+   enum DockPosition {
+      DOCK_LEFT   = 1,
+      DOCK_RIGHT  = 2,
+      DOCK_TOP    = 4,
+      DOCK_BOTTOM = 8,
+   };
+   int m_dockedBorders;
 
-	int m_snapSize;
+   int m_snapSize;
 
-	bool m_tracking;
+   bool m_tracking;
 
-	bool m_shrinked;
+   bool m_shrinked;
    bool m_lockPreviewWindow;
    bool m_hasCaption;
-	bool m_isWndVisible;
-	int m_autoHideDelay;
+   bool m_isWndVisible;
+   int m_autoHideDelay;
    UINT_PTR m_autoHideTimerId;
 
    bool IsPreviewWindowLocked() const     { return m_lockPreviewWindow; }
@@ -103,11 +109,9 @@ protected:
    void ShowCaption(bool caption);
 
    ATOM RegisterClass();
+   void UpdateIconSize();
 
-	bool CreateLangMenu();
-	void UpdateSystemMenu();
-
-	bool DockWindow(RECT & rect);
+   bool DockWindow(RECT & rect);
 
    LRESULT OnCmdAbout(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
    LRESULT OnCmdLockPreviewWindow(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -128,25 +132,22 @@ protected:
 
    LRESULT OnMove(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
    LRESULT OnWindowPosChanging(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnDisplayChange(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnShowWindow(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnDisplayChange(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnDpiChanged(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnSettingChange(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnShowWindow(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
-	LRESULT OnActivateApp(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnTimer(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnActivateApp(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnTimer(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
-	LRESULT OnMouseHover(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnMouseLeave(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-	LRESULT OnNCHitTest(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnMouseHover(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnMouseLeave(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnNCHitTest(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
    LRESULT OnPaint(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
    LRESULT OnSize(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
-   LRESULT OnHookMenuCommand(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-   LRESULT OnPrepareHookMenu(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-   LRESULT OnCheckMinToTray(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-    LRESULT OnCmdLanguageChange(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
-
-   static LRESULT CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM /*lParam*/);
+   static INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 };
 
 extern VirtualDimension vdWindow;

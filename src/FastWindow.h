@@ -1,26 +1,27 @@
-/* 
+/*
  * Fast Window - A fast and convenient message dispatching window procedure.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
- 
+
 #ifndef __FASTWINDOW_H__
 #define __FASTWINDOW_H__
 
 #include <map>
+#include <functional>
 #include <assert.h>
 
 #define FASTWINDOW_NB_TIMER_MAX 50
@@ -33,11 +34,11 @@ public:
 
    bool IsValid() const { return ::IsWindow(m_hWnd) ? true : false; }
 
-   HWND Create( LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle, int x, int y, 
+   HWND Create( LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle, int x, int y,
                 int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance);
 
-   HWND Create( DWORD dwStyleEx, LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle, 
-                int x, int y, int nWidth, int nHeight, 
+   HWND Create( DWORD dwStyleEx, LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle,
+                int x, int y, int nWidth, int nHeight,
                 HWND hWndParent, HMENU hMenu, HINSTANCE hInstance);
 
 
@@ -46,7 +47,7 @@ public:
 
    template <class T> void SetMessageHandler(UINT message, T * object, LRESULT (T::*method)(HWND, UINT, WPARAM, LPARAM))
    {
-      m_messageMap[message]((EventHandlerImp*)object, (EventHandlerImp::HandlerMethod)method); 
+      m_messageMap[message] = MakeHandler(object, method);
    }
    void UnSetMessageHandler(UINT message)
    {
@@ -57,7 +58,7 @@ public:
    {
       if (m_commandMap.empty())
          SetMessageHandler(WM_COMMAND, this, &FastWindow::CommandHandler);
-      m_commandMap[message]((EventHandlerImp*)object, (EventHandlerImp::HandlerMethod)method); 
+      m_commandMap[message] = MakeHandler(object, method);
    }
    void UnSetCommandHandler(UINT message)
    {
@@ -70,7 +71,7 @@ public:
    {
       if (m_syscommandMap.empty())
          SetMessageHandler(WM_SYSCOMMAND, this, &FastWindow::SysCommandHandler);
-      m_syscommandMap[message]((EventHandlerImp*)object, (EventHandlerImp::HandlerMethod)method); 
+      m_syscommandMap[message] = MakeHandler(object, method);
    }
    void UnSetSysCommandHandler(UINT message)
    {
@@ -83,7 +84,7 @@ public:
    {
       if (m_notifyMap.empty())
          SetMessageHandler(WM_NOTIFY, this, &FastWindow::NotifyHandler);
-      m_notifyMap[message]((EventHandlerImp*)object, (EventHandlerImp::HandlerMethod)method); 
+      m_notifyMap[message] = MakeHandler(object, method);
    }
    void UnSetNotifyHandler(UINT message)
    {
@@ -99,7 +100,7 @@ public:
          SetMessageHandler(WM_TIMER, this, &FastWindow::TimersHandler);
       timerId = FindFreeTimerId();
       if (timerId)
-         m_timersMap[timerId]((EventHandlerImp*)object, (EventHandlerImp::HandlerMethod)method);
+         m_timersMap[timerId] = MakeHandler(object, method);
       return timerId;
    }
    void DestroyTimer(UINT_PTR timerId)
@@ -124,26 +125,15 @@ public:
    operator HWND()               { return m_hWnd; }
 
 protected:
-   class EventHandlerImp {
-   public:
-      typedef LRESULT (EventHandlerImp::*HandlerMethod)(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam);
-   };
+   typedef std::function<LRESULT(HWND, UINT, WPARAM, LPARAM)> Handler;
 
-   class Handler {
-   public:
-      Handler() { return; }
-      void operator()(EventHandlerImp * object, EventHandlerImp::HandlerMethod method)
-      {  m_object = object; m_method = method; }
+   template <class T> static Handler MakeHandler(T * object, LRESULT (T::*method)(HWND, UINT, WPARAM, LPARAM))
+   {
+      return [object, method](HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam)
+             { return (object->*method)(hWnd, code, wParam, lParam); };
+   }
 
-      LRESULT operator()(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam)
-      {  return ((m_object)->*(m_method))(hWnd, code, wParam, lParam); }
-
-   protected:
-      EventHandlerImp * m_object;
-      EventHandlerImp::HandlerMethod m_method;
-   };
-
-   typedef std::map<UINT, Handler> MessageMap;
+   typedef std::map<UINT_PTR, Handler> MessageMap;
 
    HWND m_hWnd;
    MessageMap m_messageMap;
@@ -157,7 +147,7 @@ protected:
    LRESULT SysCommandHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam);
    LRESULT NotifyHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam);
    LRESULT TimersHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam);
-   static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam); 
+   static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
    UINT_PTR FindFreeTimerId();
 };

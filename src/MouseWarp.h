@@ -35,23 +35,19 @@ public:
 
    void EnableWarp(bool enable);
    bool IsWarpEnabled() const             { return m_enableWarp; }
-
    void SetSensibility(LONG sensibility);
    void SetMinDuration(DWORD minDuration);
    void SetRewarpDelay(DWORD rewarpDelay);
    void InvertMousePos(bool invert);
    void SetWarpKey(int vkey);
-
    void RefreshDesktopSize();
 
    void Configure(HWND hParentWnd);
 
 protected:
-   static DWORD WINAPI MouseCheckThread(LPVOID lpParameter);
-   static LRESULT WINAPI PropertiesDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
-
-   LRESULT OnTimer(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-   LRESULT OnMouseWarp(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   static INT_PTR CALLBACK PropertiesDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnCheckTimer(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnWarpTimer(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
    enum WarpLocation {
       WARP_NONE,
@@ -61,19 +57,19 @@ protected:
       WARP_BOTTOM,
    };
 
-   WarpLocation m_warpLocation;
-   UINT_PTR m_timerId;
+   void OnMouseWarp(WarpLocation location);
 
-   HANDLE m_hThread;       ///Mouse watch thread handle.
-   HANDLE m_hDataMutex;    ///Mutex protecting access to the various settings. These are shared between the mouse watch thread and application thread.
-   HANDLE m_hTerminateThreadEvt; ///Event used to terminate the thread.
+   WarpLocation m_warpLocation;  ///Border on which the mouse is
+   WarpLocation m_checkLocation; ///Border on which the mouse was at the last check
+   DWORD m_duration;             ///Time spent on the border
 
-   RECT m_centerRect;      ///Rectangle outside of which warp should be initiated. Desktop rect corrected with sensibility. Protected by m_hDataMutex.
-   DWORD m_reWarpDelay;    ///Delay before a second warp is triggered on the same border. 0 to disable. Protected by m_hDataMutex.
+   UINT_PTR m_warpTimerId;       ///Timer triggering the desktop switch
+   UINT_PTR m_checkTimerId;      ///Timer polling the mouse position
 
+   RECT m_centerRect;      ///Rectangle outside of which warp should be initiated. Desktop rect corrected with sensibility.
+   DWORD m_reWarpDelay;    ///Delay before a second warp is triggered on the same border. 0 to disable.
    LONG m_sensibility;     ///Number of pixels from the border for warp to be triggered
    DWORD m_minDuration;    ///Minimum duration to stay on a border for warp to happen
-
    int m_warpVKey;         ///Optional VKey to press to enable warp. 0 to disable.
    bool m_invertMousePos;  ///Does the mouse move to the other side of the screen when switching ?
    bool m_enableWarp;      ///Is warp enable ?

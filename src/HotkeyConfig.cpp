@@ -1,19 +1,19 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
@@ -26,23 +26,23 @@
 
 list<ConfigurableHotkey*> ShortcutsConfigurationDlg::m_hotkeys;
 
-ConfigurableHotkey::ConfigurableHotkey(): m_hotkey(0)  
+ConfigurableHotkey::ConfigurableHotkey(): m_hotkey(0)
 {
    ShortcutsConfigurationDlg::RegisterHotkey(this);
 }
 
-ConfigurableHotkey::~ConfigurableHotkey()      
+ConfigurableHotkey::~ConfigurableHotkey()
 {
-   ShortcutsConfigurationDlg::UnRegisterHotkey(this); 
-   if (m_hotkey) 
+   ShortcutsConfigurationDlg::UnRegisterHotkey(this);
+   if (m_hotkey)
       HotKeyManager::GetInstance()->UnregisterHotkey(this);
 }
 
-int ConfigurableHotkey::GetHotkey() const          
+int ConfigurableHotkey::GetHotkey() const
 {
-   return m_hotkey; 
+   return m_hotkey;
 }
-      
+
 bool ConfigurableHotkey::SetHotkey(int hotkey)
 {
    HotKeyManager * keyMan = HotKeyManager::GetInstance();
@@ -54,7 +54,7 @@ bool ConfigurableHotkey::SetHotkey(int hotkey)
    //Unregister the previous hotkey
    if (m_hotkey != 0)
       keyMan->UnregisterHotkey(this);
-   
+
    m_hotkey = hotkey;
 
    //Setting the hotkey to 0 removes the shortcut
@@ -67,13 +67,13 @@ bool ConfigurableHotkey::SetHotkey(int hotkey)
 	return true;
 }
 
-extern void GetShortcutName(int shortcut, char* str, int bufLen);
+extern void GetShortcutName(int shortcut, LPWSTR str, int bufLen);
 
 void ShortcutsConfigurationDlg::InsertItem(ConfigurableHotkey* hotkey)
 {
    LVITEM item;
 
-   item.pszText = (LPSTR)hotkey->GetName();
+   item.pszText = (LPWSTR)hotkey->GetName();
    item.iItem = ListView_GetItemCount(m_listViewWnd);
    item.iSubItem = 0;
    item.lParam = (LPARAM)hotkey;
@@ -95,8 +95,8 @@ ConfigurableHotkey* ShortcutsConfigurationDlg::GetItemHotkey(int index)
 
 void ShortcutsConfigurationDlg::SetItemShortcut(int index, int shortcut)
 {
-   char buffer[50];
-   GetShortcutName(shortcut, buffer, sizeof(buffer)/sizeof(char));
+   wchar_t buffer[50];
+   GetShortcutName(shortcut, buffer, sizeof(buffer)/sizeof(*buffer));
    ListView_SetItemText(m_listViewWnd, index, 1, buffer);
 
    GetItemHotkey(index)->m_tempHotkey = shortcut;
@@ -126,7 +126,7 @@ void ShortcutsConfigurationDlg::BeginEdit(int item)
 
 void ShortcutsConfigurationDlg::EndEdit()
 {
-   int key = (LPARAM)SendMessage(m_editCtrl, HKM_GETHOTKEY, 0, 0);
+   int key = (int)SendMessage(m_editCtrl, HKM_GETHOTKEY, 0, 0);
 
    //Update the list
    SetItemShortcut(m_editedItemIndex, key);
@@ -138,39 +138,34 @@ void ShortcutsConfigurationDlg::EndEdit()
 ShortcutsConfigurationDlg::ShortcutsConfigurationDlg(HWND hDlg)
 {
    LVCOLUMN column;
-	String text;
 
    m_hDlg = hDlg;
 
    //Setup list view
    m_listViewWnd = GetDlgItem(hDlg, IDC_SHORTCUTSLIST);
-   ListView_SetExtendedListViewStyleEx(m_listViewWnd, 
+   ListView_SetExtendedListViewStyleEx(m_listViewWnd,
                                        LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
    column.mask = LVCF_TEXT;
-	text = Locale::GetInstance().GetString(IDS_COLUMN_FUNCTION);
-   column.pszText = text.GetBuffer();
+   locGetString(column.pszText, IDS_COLUMN_FUNCTION);
    ListView_InsertColumn(m_listViewWnd, 1, &column);
-	text.ReleaseBuffer();
 
    column.mask = LVCF_SUBITEM | LVCF_FMT | LVCF_TEXT;
-	text = Locale::GetInstance().GetString(IDS_COLUMN_SHORTCUT);
-	column.pszText = text.GetBuffer();
+   locGetString(column.pszText, IDS_COLUMN_SHORTCUT);
    column.iSubItem = 0;
    column.fmt = LVCFMT_LEFT;
    ListView_InsertColumn(m_listViewWnd, 1, &column);
-	text.ReleaseBuffer();
 
    //Add all registered shortcuts
    for(list<ConfigurableHotkey*>::iterator it = m_hotkeys.begin(); it != m_hotkeys.end(); it++)
       InsertItem(*it);
-   
+
    //Resize all columns to fit
    for(int i=0; i<2; i++)
       ListView_SetColumnWidth(m_listViewWnd, i, -2);
 
    //Create the edit control
-   m_editCtrl = CreateWindow("AlternateHotKeyControl", "", WS_BORDER | WS_CHILD | WS_TABSTOP, 0, 0, 10, 10, 
+   m_editCtrl = CreateWindow(L"AlternateHotKeyControl", L"", WS_BORDER | WS_CHILD | WS_TABSTOP, 0, 0, 10, 10,
                              m_listViewWnd, NULL, vdWindow, 0);
 }
 
@@ -186,7 +181,7 @@ LRESULT ShortcutsConfigurationDlg::OnApply()
 {
    for(int i=0; i<ListView_GetItemCount(m_listViewWnd); i++)
       GetItemHotkey(i)->Commit();
-   
+
    //Apply succeeded
    return PSNRET_NOERROR;
 }
@@ -200,7 +195,7 @@ void ShortcutsConfigurationDlg::OnClick(LPNMITEMACTIVATE lpnmitem)
       return;
 
    BeginEdit(lpnmitem->iItem);
-}   
+}
 
 void ShortcutsConfigurationDlg::OnRightClick(LPNMITEMACTIVATE lpnmitem)
 {
@@ -213,8 +208,8 @@ void ShortcutsConfigurationDlg::OnRightClick(LPNMITEMACTIVATE lpnmitem)
    POINT pt = { lpnmitem->ptAction.x, lpnmitem->ptAction.y };
    ClientToScreen(m_listViewWnd, &pt);
 
-   switch(TrackPopupMenu(hPopupMenu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON, 
-                         pt.x, pt.y, 0, 
+   switch(TrackPopupMenu(hPopupMenu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                         pt.x, pt.y, 0,
                          m_hDlg, NULL))
    {
    case IDC_CLEAR_SHORTCUT:
@@ -239,7 +234,7 @@ void ShortcutsConfigurationDlg::OnSetFocus()
 }
 
 // Message handler for the shortcuts settings page.
-LRESULT CALLBACK ShortcutsConfigurationDlg::DlgProc(HWND hDlg, UINT message, WPARAM /*wParam*/, LPARAM lParam)
+INT_PTR CALLBACK ShortcutsConfigurationDlg::DlgProc(HWND hDlg, UINT message, WPARAM /*wParam*/, LPARAM lParam)
 {
    ShortcutsConfigurationDlg * self;
 
@@ -287,13 +282,13 @@ LRESULT CALLBACK ShortcutsConfigurationDlg::DlgProc(HWND hDlg, UINT message, WPA
          self = (ShortcutsConfigurationDlg*)GetWindowLongPtr(hDlg, DWLP_USER);
          if (self->IsEditing())
             self->EndEdit();
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
          self = (ShortcutsConfigurationDlg*)GetWindowLongPtr(hDlg, DWLP_USER);
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, self->OnApply());
-         return TRUE; 
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, self->OnApply());
+         return TRUE;
       }
       break;
 	}

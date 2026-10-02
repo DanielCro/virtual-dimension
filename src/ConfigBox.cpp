@@ -20,10 +20,10 @@
 
 #include "stdafx.h"
 #include "VirtualDimension.h"
-#include "settings.h"
+#include "Settings.h"
 #include "DesktopManager.h"
 #include "WindowsManager.h"
-#include "transparency.h"
+#include "Transparency.h"
 #include "OnScreenDisplay.h"
 #include <string.h>
 #include <prsht.h>
@@ -32,29 +32,20 @@
 #include "ApplicationListDlg.h"
 #include "Locale.h"
 
-extern char desk_name[80];
-extern char desk_wallpaper[256];
-extern int desk_hotkey;
-LRESULT CALLBACK DeskProperties(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
-
 void FormatTransparencyLevel(HWND hWnd, int level)
 {
-   char buffer[15];
+   wchar_t buffer[32];
 
    if (level == TRANSPARENCY_DISABLED)
-	{
-		char * disabled;
-		locGetString(disabled, IDS_DISABLED);
-		sprintf(buffer, "%3i (%s)", level, disabled);
-	}
+      swprintf_s(buffer, L"%3i (%s)", level, Locale::GetInstance().GetString(IDS_DISABLED));
    else
-      sprintf(buffer, "%3i", level);
+      swprintf_s(buffer, L"%3i", level);
 
    SendMessage(hWnd, WM_SETTEXT, 0, (LPARAM)buffer);
 }
 
 // Message handler for the global settings page.
-LRESULT CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -108,7 +99,7 @@ LRESULT CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, L
       switch(LOWORD(wParam))
       {
       case IDC_TRAYICON_CHECK: {
-         HRESULT res = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0);
+         BOOL res = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
          HWND hWnd = GetDlgItem(hDlg, IDC_CLOSETOTRAY_CHECK);
          EnableWindow(hWnd, res);
          }break;
@@ -126,7 +117,7 @@ LRESULT CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, L
       switch (pnmh->code)
       {
       case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
@@ -168,7 +159,7 @@ LRESULT CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, L
             //Apply auto switch desktop
             winMan->SetAutoSwitchDesktop(IsDlgButtonChecked(hDlg, IDC_AUTOSWITCHDESKTOP_CHECK) == BST_CHECKED);
 
-            //Setup integrate with shell
+            //Apply all windows in task list
             winMan->ShowAllWindowsInTaskList(IsDlgButtonChecked(hDlg, IDC_ALLWINDOWSINTASKLIST_CHECK) == BST_CHECKED);
 
 				//Apply snap-size
@@ -181,7 +172,7 @@ LRESULT CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, L
             mousewarp->EnableWarp(IsDlgButtonChecked(hDlg, IDC_MOUSEWARP_CHECK) == BST_CHECKED);
 
             //Apply succeeded
-            SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
          }
          return TRUE;
       }
@@ -191,9 +182,9 @@ LRESULT CALLBACK SettingsConfiguration(HWND hDlg, UINT message, WPARAM wParam, L
 }
 
 // Message handler for the display settings page.
-LRESULT CALLBACK DisplayConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK DisplayConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
-	char * text;
+	LPCWSTR text;
 
 	switch (message)
 	{
@@ -291,7 +282,7 @@ LRESULT CALLBACK DisplayConfiguration(HWND hDlg, UINT message, WPARAM wParam, LP
          case TB_PAGEUP:
          case TB_TOP :
          default:
-            pos = SendMessage((HWND)lParam, TBM_GETPOS, 0, 0);
+            pos = (int)SendMessage((HWND)lParam, TBM_GETPOS, 0, 0);
             break;
          }
 
@@ -305,12 +296,12 @@ LRESULT CALLBACK DisplayConfiguration(HWND hDlg, UINT message, WPARAM wParam, LP
       switch (pnmh->code)
       {
       case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
          //Apply succeeded
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
          return TRUE;
       }
       break;
@@ -319,7 +310,7 @@ LRESULT CALLBACK DisplayConfiguration(HWND hDlg, UINT message, WPARAM wParam, LP
 }
 
 // Message handler for desktop configuration page.
-LRESULT CALLBACK DeskConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK DeskConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -541,11 +532,11 @@ LRESULT CALLBACK DeskConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARA
          switch (pnmh->code)
          {
          case PSN_KILLACTIVE:
-            SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
             return TRUE;
 
          case PSN_APPLY:
-            SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
             return TRUE;
          }
       }
@@ -555,7 +546,7 @@ LRESULT CALLBACK DeskConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARA
 }
 
 // Message handler for the OSD settings page.
-LRESULT CALLBACK OSDConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK OSDConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
@@ -625,7 +616,7 @@ LRESULT CALLBACK OSDConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM
       switch(LOWORD(wParam))
       {
       case IDC_FONT_BTN:
-         deskMan->GetOSDWindow()->SelectFont();
+         deskMan->GetOSDWindow()->SelectOSDFont();
          break;
 
       case IDC_BGCOLOR_BTN:
@@ -662,7 +653,7 @@ LRESULT CALLBACK OSDConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM
       switch (pnmh->code)
       {
       case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
@@ -690,7 +681,7 @@ LRESULT CALLBACK OSDConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM
             osd->SetDefaultTimeout(GetDlgItemInt(hDlg, IDC_TIMEOUT_EDIT, NULL, FALSE));
 
             //Apply succeeded
-            SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
          }
          return TRUE;
       }
@@ -700,7 +691,7 @@ LRESULT CALLBACK OSDConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM
 }
 
 // Message handler for the troubleshooting settings page.
-LRESULT CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
    switch (message)
    {
@@ -708,9 +699,6 @@ LRESULT CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wP
       {
          Settings settings;
          int hidingmethod;
-
-         //Setup integrate with shell
-         CheckDlgButton(hDlg, IDC_INTEGRATEWTHSHELL_CHECK, winMan->IsIntegrateWithShell() ? BST_CHECKED : BST_UNCHECKED);
 
          //Setup hiding method
          hidingmethod = settings.LoadSetting(Settings::DefaultHidingMethod);
@@ -725,8 +713,8 @@ LRESULT CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wP
       {
       case IDC_HIDINGMETHODEXCEPTIONS_BTN:
          {
-				LPCTSTR values[4];
-				char * coltext;
+				LPCWSTR values[4];
+				LPCWSTR coltext;
             Settings settings;
 				locGetString(values[0], IDS_METHOD_HIDE);
 				locGetString(values[1], IDS_METHOD_MINIMIZE);
@@ -734,21 +722,15 @@ LRESULT CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wP
 				values[3] = NULL;
 				locGetString(coltext, IDS_METHOD);
             Config::Group * group = settings.GetHidingMethodExceptions();
-            ApplicationListDlg dlg(group, coltext, settings.LoadSetting(Settings::DefaultHidingMethod), values);
-				dlg.ShowDialog(Locale::GetInstance(), hDlg);
-            delete group;
+            if (group)
+            {
+               ApplicationListDlg dlg(group, coltext, settings.LoadSetting(Settings::DefaultHidingMethod), values);
+               dlg.ShowDialog(Locale::GetInstance(), hDlg);
+               delete group;
+            }
          }
          break;
 
-      case IDC_SHELLINTEGEXCEPTION_BTN:
-         {
-            Settings settings;
-            Config::Group * group = settings.GetShellIntegrationExceptions();
-            ApplicationListDlg dlg(group);
-            dlg.ShowDialog(Locale::GetInstance(), hDlg);
-            delete group;
-         }
-         break;
       }
       break;
 
@@ -757,14 +739,12 @@ LRESULT CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wP
       switch (pnmh->code)
       {
       case PSN_KILLACTIVE:
-         SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, FALSE);
+         SetWindowLongPtr(hDlg, DWLP_MSGRESULT, FALSE);
          return TRUE;
 
       case PSN_APPLY:
          {
             int i;
-
-            winMan->SetIntegrateWithShell(IsDlgButtonChecked(hDlg, IDC_INTEGRATEWTHSHELL_CHECK) == BST_CHECKED);
 
             for(i = IDC_HIDEMETHOD_RADIO; i <= IDC_MOVEMETHOD_RATIO; i++)
                if (IsDlgButtonChecked(hDlg, i))
@@ -775,7 +755,7 @@ LRESULT CALLBACK TroubleShootingConfiguration(HWND hDlg, UINT message, WPARAM wP
                }
 
             //Apply succeeded
-            SetWindowLong(pnmh->hwndFrom, DWL_MSGRESULT, PSNRET_NOERROR);
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
          }
          return TRUE;
       }
@@ -796,25 +776,25 @@ HWND CreateConfigBox()
    pages[0].dwSize = sizeof(PROPSHEETPAGE);
    pages[0].hInstance = hresinst;
    pages[0].dwFlags = PSP_DEFAULT;
-   pages[0].pfnDlgProc = (DLGPROC)SettingsConfiguration;
+   pages[0].pfnDlgProc = SettingsConfiguration;
    pages[0].pszTemplate = MAKEINTRESOURCE(IDD_GLOBAL_SETTINGS);
 
    pages[1].dwSize = sizeof(PROPSHEETPAGE);
    pages[1].hInstance = hresinst;
    pages[1].dwFlags = PSP_DEFAULT;
-   pages[1].pfnDlgProc = (DLGPROC)DisplayConfiguration;
+   pages[1].pfnDlgProc = DisplayConfiguration;
    pages[1].pszTemplate = MAKEINTRESOURCE(IDD_DISPLAY_SETTINGS);
 
    pages[2].dwSize = sizeof(PROPSHEETPAGE);
    pages[2].hInstance = hresinst;
    pages[2].dwFlags = PSP_DEFAULT;
-   pages[2].pfnDlgProc = (DLGPROC)DeskConfiguration;
+   pages[2].pfnDlgProc = DeskConfiguration;
    pages[2].pszTemplate = MAKEINTRESOURCE(IDD_DESKS_SETTINGS);
 
    pages[3].dwSize = sizeof(PROPSHEETPAGE);
    pages[3].hInstance = hresinst;
    pages[3].dwFlags = PSP_DEFAULT;
-   pages[3].pfnDlgProc = (DLGPROC)OSDConfiguration;
+   pages[3].pfnDlgProc = OSDConfiguration;
    pages[3].pszTemplate = MAKEINTRESOURCE(IDD_OSD_SETTINGS);
 
    pages[4].dwSize = sizeof(PROPSHEETPAGE);
@@ -826,7 +806,7 @@ HWND CreateConfigBox()
    pages[5].dwSize = sizeof(PROPSHEETPAGE);
    pages[5].hInstance = hresinst;
    pages[5].dwFlags = PSP_DEFAULT;
-   pages[5].pfnDlgProc = (DLGPROC)TroubleShootingConfiguration;
+   pages[5].pfnDlgProc = TroubleShootingConfiguration;
    pages[5].pszTemplate = MAKEINTRESOURCE(IDD_TROUBLESHOOTING_SETTINGS);
 
    memset(&propsheet, 0, sizeof(propsheet));

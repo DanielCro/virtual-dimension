@@ -1,249 +1,344 @@
-/* 
- * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+ * Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
  * for the Microsoft Windows platform.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
 
 #include "StdAfx.h"
-#include "platformhelper.h"
-#include <ole2.h>
-#include "Locale.h"
-#include "Resource.h"
+#include "PlatformHelper.h"
+#include <wincodec.h>
+#include <propkey.h>
+#include <propsys.h>
+#include <shlwapi.h>
+#include <stdio.h>
+#include <share.h>
+#include <wrl/client.h>
 
-PlatformHelper instance;
+using Microsoft::WRL::ComPtr;
 
-DWORD (*PlatformHelper::GetWindowFileName)(HWND hWnd, LPTSTR lpFileName, int iBufLen) = NULL;
-HMODULE PlatformHelper::hPSAPILib = NULL;
-PlatformHelper::GetModuleFileNameEx_t * PlatformHelper::pGetModuleFileNameEx = NULL;
-
-void (*PlatformHelper::AlphaBlend)(HDC hdcDest, int nXOriginDest, int nYOriginDest, 
-                                   HDC hdcSrc, int nXOriginSrc, int nYOriginSrc, 
-                                   int nWidth, int nHeight, BYTE sourceAlpha) = NULL;
-HMODULE PlatformHelper::hMSImg32Lib = NULL;
-PlatformHelper::AlphaBlend_t * PlatformHelper::pAlphaBlend = NULL;
-
-PlatformHelper::SetMenuInfo_t * PlatformHelper::SetMenuInfo = NULL;
-
-#define HIMETRIC_INCH   2540 
-
-PlatformHelper::PlatformHelper(void)
+#ifdef DEBUG
+void TraceMessage(LPCWSTR format, ...)
 {
-   hPSAPILib = LoadLibrary("psapi.dll");
-   pGetModuleFileNameEx = (GetModuleFileNameEx_t *)GetProcAddress(hPSAPILib, "GetModuleFileNameExA");
+   wchar_t buffer[512];
+   va_list args;
 
-   if (pGetModuleFileNameEx)
-      GetWindowFileName = GetWindowFileNameNT;
-   else
-      GetWindowFileName = GetWindowFileName9x;
+   va_start(args, format);
+   _vsnwprintf_s(buffer, _TRUNCATE, format, args);
+   va_end(args);
 
-   hMSImg32Lib = LoadLibrary("msimg32.dll");
-   pAlphaBlend = (AlphaBlend_t *)GetProcAddress(hMSImg32Lib, "AlphaBlend");
+   OutputDebugStringW(L"VD: ");
+   OutputDebugStringW(buffer);
+   OutputDebugStringW(L"\n");
 
-   if (pAlphaBlend)
-      AlphaBlend = AlphaBlendMSImg32;
-   else
-      AlphaBlend = AlphaBlendEmul;
-
-   SetMenuInfo = (SetMenuInfo_t*)GetProcAddress(GetModuleHandle("User32.dll"), "SetMenuInfo");
-   if (SetMenuInfo == NULL)
-      SetMenuInfo = (SetMenuInfo_t*)SetMenuInfoDummy;
+   //Also keep a log file, which is handy to understand what happened
+   static FILE * log = NULL;
+   if (log == NULL)
+   {
+      wchar_t path[MAX_PATH];
+      GetTempPathW(MAX_PATH, path);
+      wcscat_s(path, L"VirtualDimension-debug.log");
+      log = _wfsopen(path, L"w, ccs=UTF-8", _SH_DENYWR);
+   }
+   if (log)
+   {
+      SYSTEMTIME time;
+      GetLocalTime(&time);
+      fwprintf(log, L"%02d:%02d:%02d.%03d %s\n", time.wHour, time.wMinute, time.wSecond, time.wMilliseconds, buffer);
+      fflush(log);
+   }
 }
+#endif
 
-PlatformHelper::~PlatformHelper(void)
+DWORD PlatformHelper::GetWindowFileName(HWND hWnd, LPWSTR lpFileName, int nBufLen)
 {
-   FreeLibrary(hMSImg32Lib);
-   FreeLibrary(hPSAPILib);
-}
-
-DWORD PlatformHelper::GetWindowFileNameNT(HWND hWnd, LPTSTR lpFileName, int nBufLen)
-{
-   DWORD pId;
-   HINSTANCE hInstance;
+   DWORD pId = 0;
+   DWORD size = nBufLen;
    HANDLE hProcess;
-   DWORD res;
 
-   hInstance = (HINSTANCE)GetWindowLong(hWnd, GWL_HINSTANCE);
+   if (nBufLen <= 0)
+      return 0;
+   *lpFileName = 0;
+
    GetWindowThreadProcessId(hWnd, &pId);
-   hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pId);
-   res = pGetModuleFileNameEx(hProcess, hInstance, lpFileName, nBufLen);
+   hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pId);
+   if (!hProcess)
+      return 0;
+
+   if (!QueryFullProcessImageNameW(hProcess, 0, lpFileName, &size))
+   {
+      *lpFileName = 0;
+      size = 0;
+   }
+   CloseHandle(hProcess);
+
+   return size;
+}
+
+bool PlatformHelper::IsWindowCloaked(HWND hWnd)
+{
+   DWORD cloaked = 0;
+   return SUCCEEDED(DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+}
+
+static bool GetProcessIntegrityLevel(HANDLE hProcess, DWORD * level)
+{
+   HANDLE hToken;
+   BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+   DWORD length;
+   bool res = false;
+
+   if (!OpenProcessToken(hProcess, TOKEN_QUERY, &hToken))
+      return false;
+
+   if (GetTokenInformation(hToken, TokenIntegrityLevel, buffer, sizeof(buffer), &length))
+   {
+      PSID sid = ((TOKEN_MANDATORY_LABEL*)buffer)->Label.Sid;
+      *level = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+      res = true;
+   }
+   CloseHandle(hToken);
+
+   return res;
+}
+
+bool PlatformHelper::CanManageWindow(HWND hWnd)
+{
+   static DWORD ourLevel = MAXDWORD;
+   DWORD pId = 0;
+   DWORD level;
+   HANDLE hProcess;
+   bool res;
+
+   if (ourLevel == MAXDWORD && !GetProcessIntegrityLevel(GetCurrentProcess(), &ourLevel))
+      ourLevel = SECURITY_MANDATORY_MEDIUM_RID;
+
+   GetWindowThreadProcessId(hWnd, &pId);
+   hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pId);
+   if (!hProcess)
+      return false;
+
+   //If the token cannot be queried, the process is most likely elevated (or protected)
+   res = GetProcessIntegrityLevel(hProcess, &level) && level <= ourLevel;
    CloseHandle(hProcess);
 
    return res;
 }
 
-DWORD PlatformHelper::GetWindowFileName9x(HWND, LPTSTR lpFileName, int nBufLen)
+bool PlatformHelper::IsWindowResponsive(HWND hWnd, UINT timeout)
 {
-   if (nBufLen > 0)
-      *lpFileName = '\000';
-   return 0;
+   DWORD_PTR result;
+   return SendMessageTimeoutW(hWnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, timeout, &result) != 0;
 }
 
-IPicture * PlatformHelper::OpenImage(LPCTSTR fileName)
+/** Convert a 32bpp premultiplied-alpha bitmap to an icon. */
+static HICON BitmapToIcon(HBITMAP hBitmap)
 {
-   IPicture * picture = NULL;
-   HGLOBAL hGlobal;
-   IStream* pStream;
-   DWORD dwSize;
+   ICONINFO ii;
+   SIZE size = PlatformHelper::GetBitmapSize(hBitmap);
+   HICON hIcon;
 
-   if (IS_INTRESOURCE(fileName))
+   ii.fIcon = TRUE;
+   ii.xHotspot = ii.yHotspot = 0;
+   ii.hbmColor = hBitmap;
+   ii.hbmMask = CreateBitmap(size.cx, size.cy, 1, 1, NULL);   //ignored: the color bitmap has an alpha channel
+   hIcon = CreateIconIndirect(&ii);
+   DeleteObject(ii.hbmMask);
+
+   return hIcon;
+}
+
+HICON PlatformHelper::GetAppIconForWindow(HWND hWnd, int size)
+{
+   ComPtr<IPropertyStore> store;
+   PROPVARIANT value;
+   HICON hIcon = NULL;
+
+   if (FAILED(SHGetPropertyStoreForWindow(hWnd, IID_PPV_ARGS(&store))))
+      return NULL;
+
+   PropVariantInit(&value);
+   if (SUCCEEDED(store->GetValue(PKEY_AppUserModel_ID, &value)) && value.vt == VT_LPWSTR && value.pwszVal && *value.pwszVal)
    {
-      HRSRC hrsrc = FindResource(NULL, fileName, MAKEINTRESOURCE(300));
-      if (!hrsrc)
+      ComPtr<IShellItemImageFactory> factory;
+      if (SUCCEEDED(SHCreateItemInKnownFolder(FOLDERID_AppsFolder, KF_FLAG_DONT_VERIFY, value.pwszVal, IID_PPV_ARGS(&factory))))
+      {
+         HBITMAP hBitmap;
+         SIZE sz = { size, size };
+         if (SUCCEEDED(factory->GetImage(sz, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &hBitmap)))
+         {
+            hIcon = BitmapToIcon(hBitmap);
+            DeleteObject(hBitmap);
+         }
+      }
+   }
+   PropVariantClear(&value);
+
+   return hIcon;
+}
+
+static ComPtr<IWICImagingFactory> GetImagingFactory()
+{
+   ComPtr<IWICImagingFactory> factory;
+   CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+   return factory;
+}
+
+static HBITMAP DecodeImage(IWICImagingFactory * factory, IWICBitmapDecoder * decoder, int width, int height)
+{
+   ComPtr<IWICBitmapFrameDecode> frame;
+   ComPtr<IWICFormatConverter> converter;
+   ComPtr<IWICBitmapSource> source;
+   UINT cx, cy;
+
+   if (FAILED(decoder->GetFrame(0, &frame)) ||
+       FAILED(factory->CreateFormatConverter(&converter)) ||
+       FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
+                                    NULL, 0.0, WICBitmapPaletteTypeCustom)))
+      return NULL;
+   source = converter;
+
+   if (width > 0 && height > 0)
+   {
+      ComPtr<IWICBitmapScaler> scaler;
+      if (FAILED(factory->CreateBitmapScaler(&scaler)) ||
+          FAILED(scaler->Initialize(source.Get(), width, height, WICBitmapInterpolationModeFant)))
          return NULL;
+      source = scaler;
+   }
 
-      dwSize = SizeofResource(NULL, hrsrc);
+   if (FAILED(source->GetSize(&cx, &cy)) || cx == 0 || cy == 0)
+      return NULL;
 
-      hGlobal = GlobalAlloc(GMEM_MOVEABLE, dwSize);
-	   if(!hGlobal)
-         return NULL;
+   BITMAPINFO bmi = {};
+   bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+   bmi.bmiHeader.biWidth = cx;
+   bmi.bmiHeader.biHeight = -(LONG)cy;   //top-down
+   bmi.bmiHeader.biPlanes = 1;
+   bmi.bmiHeader.biBitCount = 32;
+   bmi.bmiHeader.biCompression = BI_RGB;
 
-      HGLOBAL hres = LoadResource(NULL, hrsrc);
-      void * pResData = LockResource(hres);
+   void * bits;
+   HBITMAP hBitmap = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
+   if (!hBitmap)
+      return NULL;
 
-      void * pData = GlobalLock(hGlobal);
-      memcpy(pData, pResData, dwSize);
-	   GlobalUnlock(hGlobal);
+   if (FAILED(source->CopyPixels(NULL, cx*4, cx*cy*4, (BYTE*)bits)))
+   {
+      DeleteObject(hBitmap);
+      return NULL;
+   }
+
+   return hBitmap;
+}
+
+HBITMAP PlatformHelper::LoadImageFile(LPCWSTR fileName, int width, int height)
+{
+   ComPtr<IWICImagingFactory> factory = GetImagingFactory();
+   ComPtr<IWICBitmapDecoder> decoder;
+
+   if (!factory || !fileName || !*fileName ||
+       FAILED(factory->CreateDecoderFromFilename(fileName, NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)))
+      return NULL;
+
+   return DecodeImage(factory.Get(), decoder.Get(), width, height);
+}
+
+HBITMAP PlatformHelper::LoadImageResource(LPCWSTR name, LPCWSTR type, int width, int height)
+{
+   ComPtr<IWICImagingFactory> factory = GetImagingFactory();
+   ComPtr<IWICBitmapDecoder> decoder;
+   ComPtr<IStream> stream;
+   HRSRC hrsrc;
+   HGLOBAL hres;
+
+   if (!factory ||
+       (hrsrc = FindResourceW(NULL, name, type)) == NULL ||
+       (hres = LoadResource(NULL, hrsrc)) == NULL)
+      return NULL;
+
+   stream.Attach(SHCreateMemStream((const BYTE*)LockResource(hres), SizeofResource(NULL, hrsrc)));
+   if (!stream ||
+       FAILED(factory->CreateDecoderFromStream(stream.Get(), NULL, WICDecodeMetadataCacheOnDemand, &decoder)))
+      return NULL;
+
+   return DecodeImage(factory.Get(), decoder.Get(), width, height);
+}
+
+SIZE PlatformHelper::GetBitmapSize(HBITMAP hBitmap)
+{
+   BITMAP bm;
+   SIZE size = { 0, 0 };
+
+   if (hBitmap && GetObject(hBitmap, sizeof(bm), &bm))
+   {
+      size.cx = bm.bmWidth;
+      size.cy = abs(bm.bmHeight);
+   }
+
+   return size;
+}
+
+void PlatformHelper::DrawBitmap(HDC hdc, HBITMAP hBitmap, const RECT& rect, bool stretch)
+{
+   SIZE size = GetBitmapSize(hBitmap);
+   LONG width = rect.right - rect.left;
+   LONG height = rect.bottom - rect.top;
+   LONG x, y, cx, cy;
+
+   if (size.cx == 0 || size.cy == 0 || width <= 0 || height <= 0)
+      return;
+
+   if (stretch)
+   {
+      x = rect.left;
+      y = rect.top;
+      cx = width;
+      cy = height;
    }
    else
    {
-      HANDLE hFile = CreateFile(fileName, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-      if (!hFile)
-         return NULL;
-
-      dwSize = GetFileSize(hFile, NULL);
-
-      hGlobal = GlobalAlloc(GMEM_MOVEABLE, dwSize);
-	   if(!hGlobal)
+      //Scale down (never up) while keeping the aspect ratio, and center
+      cx = size.cx;
+      cy = size.cy;
+      if (cx > width)
       {
-         CloseHandle(hFile);
-         return NULL;
+         cy = MulDiv(cy, width, cx);
+         cx = width;
       }
-
-	   void * pData = GlobalLock(hGlobal);
-      DWORD dwNbRead;
-      ReadFile(hFile, pData, dwSize, &dwNbRead, NULL);
-	   GlobalUnlock(hGlobal);
-
-      CloseHandle(hFile);
-
-      if (dwNbRead < dwSize)
+      if (cy > height)
       {
-         FreeResource(hGlobal);
-         return NULL;
+         cx = MulDiv(cx, height, cy);
+         cy = height;
       }
+      x = rect.left + (width - cx) / 2;
+      y = rect.top + (height - cy) / 2;
    }
 
-	if(CreateStreamOnHGlobal(hGlobal, TRUE, &pStream) == S_OK)
-   {
-		if(OleLoadPicture(pStream, dwSize, FALSE, IID_IPicture, (LPVOID *)&picture) != S_OK)
-         picture = NULL;
-
-	   pStream->Release();  
-	}
-	FreeResource(hGlobal);
-
-	return picture;
+   HDC memDC = CreateCompatibleDC(hdc);
+   HGDIOBJ oldBmp = SelectObject(memDC, hBitmap);
+   BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+   ::AlphaBlend(hdc, x, y, cx, cy, memDC, 0, 0, size.cx, size.cy, bf);
+   SelectObject(memDC, oldBmp);
+   DeleteDC(memDC);
 }
 
-bool PlatformHelper::SaveAsBitmap(IPicture * picture, LPTSTR fileName)
-{
-	bool bResult = false;
-	ILockBytes *Buffer = 0;
-	IStorage   *pStorage = 0;
-	IStream    *FileStream = 0;
-	BYTE	   *BufferBytes;
-	STATSTG		BytesStatistics;
-	DWORD		OutData;
-	long		OutStream;
-   HANDLE		BitmapFile;
-	double		SkipFloat = 0;
-	DWORD		ByteSkip = 0;
-	_ULARGE_INTEGER RealData;
-
-	CreateILockBytesOnHGlobal(NULL, TRUE, &Buffer); // Create ILockBytes Buffer
-
-	HRESULT hr = StgCreateDocfileOnILockBytes(Buffer,
-				 STGM_SHARE_EXCLUSIVE | STGM_CREATE | STGM_READWRITE, 0, &pStorage);
-
-	hr = pStorage->CreateStream(L"PICTURE",
-		 STGM_SHARE_EXCLUSIVE | STGM_CREATE | STGM_READWRITE, 0, 0, &FileStream);
-
-	picture->SaveAsFile(FileStream, TRUE, &OutStream); // Copy Data Stream
-	FileStream->Release();
-	pStorage->Release();
-	Buffer->Flush(); 
-
-	// Get Statistics For Final Size Of Byte Array
-	Buffer->Stat(&BytesStatistics, STATFLAG_NONAME);
-
-	// Cut UnNeeded Data Coming From SaveAsFile() (Leave Only "Pure" Picture Data)
-	SkipFloat = (double(OutStream) / 512); // Must Be In a 512 Blocks...
-	if(SkipFloat > DWORD(SkipFloat)) 
-      ByteSkip = (DWORD)SkipFloat + 1;
-	else 
-      ByteSkip = (DWORD)SkipFloat;
-	ByteSkip = ByteSkip * 512; // Must Be In a 512 Blocks...
-	
-	// Find Difference Between The Two Values
-	ByteSkip = (DWORD)(BytesStatistics.cbSize.QuadPart - ByteSkip);
-
-	// Allocate Only The "Pure" Picture Data
-	RealData.LowPart = 0;
-	RealData.HighPart = 0;
-	RealData.QuadPart = ByteSkip;
-	BufferBytes = (BYTE*)malloc(OutStream);
-	if(BufferBytes == NULL)
-   {  // Memory allocation failed
-      return false;
-	}
-
-	Buffer->ReadAt(RealData, BufferBytes, OutStream, &OutData);
-
-   BitmapFile = CreateFile(fileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, NULL);
-   if(BitmapFile != INVALID_HANDLE_VALUE)
-	{
-      DWORD nbWritten;
-      WriteFile(BitmapFile, BufferBytes, OutData, &nbWritten, NULL);
-      CloseHandle(BitmapFile);
-	   bResult = true;
-	}
-	else // Write File Failed...
-	{
-      LPVOID lpMsgBuf;
-		LPTSTR error;
-		locGetString(error, IDS_ERROR);
-      if (FormatMessage( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                         NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                         (LPTSTR) &lpMsgBuf, 0, NULL))
-         MessageBox( NULL, (LPCTSTR)lpMsgBuf, error, MB_OK | MB_ICONINFORMATION );
-
-      LocalFree( lpMsgBuf );
-	   bResult = false;
-	}
-	
-	Buffer->Release();
-	free(BufferBytes);
-
-	return bResult;
-}
-
-void PlatformHelper::AlphaBlendMSImg32(HDC hdcDest, int nXOriginDest, int nYOriginDest, 
-                                       HDC hdcSrc, int nXOriginSrc, int nYOriginSrc, 
-                                       int nWidth, int nHeight, BYTE sourceAlpha)
+void PlatformHelper::AlphaBlend(HDC hdcDest, int nXOriginDest, int nYOriginDest,
+                                HDC hdcSrc, int nXOriginSrc, int nYOriginSrc,
+                                int nWidth, int nHeight, BYTE sourceAlpha)
 {
    BLENDFUNCTION bf;
    bf.AlphaFormat = 0;
@@ -251,56 +346,43 @@ void PlatformHelper::AlphaBlendMSImg32(HDC hdcDest, int nXOriginDest, int nYOrig
    bf.BlendOp = AC_SRC_OVER;
    bf.SourceConstantAlpha = sourceAlpha;
 
-   pAlphaBlend(hdcDest, nXOriginDest, nYOriginDest, nWidth, nHeight, hdcSrc, 
-               nXOriginSrc, nYOriginSrc, nWidth, nHeight, bf);
+   ::AlphaBlend(hdcDest, nXOriginDest, nYOriginDest, nWidth, nHeight, hdcSrc,
+                nXOriginSrc, nYOriginSrc, nWidth, nHeight, bf);
 }
 
-void PlatformHelper::AlphaBlendEmul(HDC hdcDest, int nXOriginDest, int nYOriginDest, 
-                                    HDC hdcSrc, int nXOriginSrc, int nYOriginSrc, 
-                                    int nWidth, int nHeight, BYTE sourceAlpha)
+int PlatformHelper::ScaleForWindow(HWND hWnd, int value)
 {
-   const BYTE otherAlpha = 255-sourceAlpha;
-   for(int x = 0; x < nWidth; x++)
-      for(int y = 0; y < nHeight; y++)
-      {
-         COLORREF dst = GetPixel(hdcDest, x+nXOriginDest, y+nYOriginDest);
-         COLORREF src = GetPixel(hdcSrc, x+nXOriginSrc, y+nYOriginSrc);
-         COLORREF res = RGB((GetRValue(dst) * sourceAlpha + GetRValue(src) * otherAlpha) >> 8,
-                            (GetGValue(dst) * sourceAlpha + GetGValue(src) * otherAlpha) >> 8,
-                            (GetBValue(dst) * sourceAlpha + GetBValue(src) * otherAlpha) >> 8);
-         SetPixel(hdcDest, x+nXOriginDest, y+nYOriginDest, res);
-      }
+   UINT dpi = hWnd ? GetDpiForWindow(hWnd) : 0;
+   if (dpi == 0)
+      dpi = GetDpiForSystem();
+   return MulDiv(value, dpi, USER_DEFAULT_SCREEN_DPI);
 }
 
-void PlatformHelper::CustomDrawIPicture(IPicture * picture, LPDRAWITEMSTRUCT lpDrawItem, bool resize)
+static RECT GetMonitorWorkArea(HMONITOR hMonitor)
 {
-   LPRECT rect = &lpDrawItem->rcItem;
-   OLE_XSIZE_HIMETRIC width;
-   OLE_YSIZE_HIMETRIC height;
-   LONG x;
-   LONG y;
-   LONG nWidth;
-   LONG nHeight;
-   
-   picture->get_Width(&width);
-   picture->get_Height(&height);
+   MONITORINFO mi;
+   mi.cbSize = sizeof(mi);
+   if (!GetMonitorInfo(hMonitor, &mi))
+      SystemParametersInfo(SPI_GETWORKAREA, 0, &mi.rcWork, 0);
+   return mi.rcWork;
+}
 
-   if (resize)
-   {
-      //Get target dimension
-      nWidth = rect->right - rect->left;
-      nHeight = rect->bottom - rect->top;
-   }
-   else
-   {
-      //Get image dimensions (convert to device units)
-      nWidth  = MulDiv(width, GetDeviceCaps(lpDrawItem->hDC, LOGPIXELSX), HIMETRIC_INCH);
-      nHeight = MulDiv(height, GetDeviceCaps(lpDrawItem->hDC, LOGPIXELSY), HIMETRIC_INCH);
-   }
+RECT PlatformHelper::GetWorkArea(HWND hWnd)
+{
+   return GetMonitorWorkArea(MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST));
+}
 
-   //Center picture
-   x = (rect->left + rect->right - nWidth) / 2;
-   y = (rect->top + rect->bottom - nHeight) / 2;
+RECT PlatformHelper::GetWorkArea(const RECT& rect)
+{
+   return GetMonitorWorkArea(MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST));
+}
 
-   picture->Render(lpDrawItem->hDC, x, y, nWidth, nHeight, 0, height, width, -height, rect);
+RECT PlatformHelper::GetVirtualScreen()
+{
+   RECT rect;
+   rect.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+   rect.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+   rect.right = rect.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+   rect.bottom = rect.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+   return rect;
 }

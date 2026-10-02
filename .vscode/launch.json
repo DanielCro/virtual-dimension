@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Virtual Dimension",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/x64-debug/VirtualDimension.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build/x64-debug",
+      "stopAtEntry": false,
+      "console": "internalConsole",
+      "preLaunchTask": "Build (Debug)"
+    },
+    {
+      "name": "Run Virtual Dimension (Release)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/x64-release/VirtualDimension.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/build/x64-release",
+      "console": "internalConsole",
+      "preLaunchTask": "Build (Release)"
+    }
+  ]
+}

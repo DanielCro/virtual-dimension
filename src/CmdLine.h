@@ -41,7 +41,7 @@ public:
     * showing command line usage.
     * @param arg Type of argument: none, required, or optional.
     */
-   CommandLineOption(char opcode, UINT resid, ArgType arg = no_argument);
+   CommandLineOption(wchar_t opcode, UINT resid, ArgType arg = no_argument);
 
    virtual ~CommandLineOption()		{}
 
@@ -63,17 +63,17 @@ public:
    /** Register an option.
     * This setp is needed for the option to be recognized.
     */
-   static void RegisterOption(char opcode, CommandLineOption* option);
+   static void RegisterOption(wchar_t opcode, CommandLineOption* option);
 
    /** Get an option.
 	*/
-   static CommandLineOption * GetOption(char opcode);
+   static CommandLineOption * GetOption(wchar_t opcode);
 
 protected:
    UINT m_resid;
    ArgType m_argType;
 
-   static std::map<char, CommandLineOption*> s_argsmap;	/// List of all options
+   static std::map<wchar_t, CommandLineOption*>& GetOptionsMap();	/// List of all options
 };
 
 /** Simple option class to parse a flag.
@@ -81,7 +81,7 @@ protected:
  */
 class CommandLineFlag : public CommandLineOption {
 public:
-   CommandLineFlag(char opcode, UINT resid):
+   CommandLineFlag(wchar_t opcode, UINT resid):
       CommandLineOption(opcode, resid), m_flag(false)
    {}
 
@@ -97,7 +97,7 @@ protected:
  */
 class CommandLineInt : public CommandLineOption {
 public:
-   CommandLineInt(char opcode, UINT resid, int defval=0, int optval=1, ArgType type=required_argument):
+   CommandLineInt(wchar_t opcode, UINT resid, int defval=0, int optval=1, ArgType type=required_argument):
       CommandLineOption(opcode, resid, type), m_flag(defval), m_optval(optval)
    {}
 
@@ -105,8 +105,8 @@ public:
    {
 		if (arg)
 		{
-			char * ptr;
-			int val = strtol(arg, &ptr, 0);
+			wchar_t * ptr;
+			int val = wcstol(arg, &ptr, 0);
 			if (ptr != arg)
 				m_flag = val;
 		}
@@ -126,7 +126,7 @@ protected:
  */
 class CommandLineStr : public CommandLineOption {
 public:
-   CommandLineStr(char opcode, UINT resid, LPCTSTR defval="", LPCTSTR optval="", ArgType type=required_argument):
+   CommandLineStr(wchar_t opcode, UINT resid, LPCWSTR defval=L"", LPCWSTR optval=L"", ArgType type=required_argument):
       CommandLineOption(opcode, resid, type), m_str(defval), m_optval(optval)
    {}
 
@@ -153,7 +153,7 @@ public:
     * This is the main entry point. It parses the given command line, and handles
     * each option.
     */
-   bool ParseCommandLine(LPTSTR cmdline);
+   bool ParseCommandLine(LPCWSTR cmdline);
 
 protected:
    bool ProcessArg(LPCTSTR arg);

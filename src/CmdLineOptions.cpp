@@ -22,31 +22,32 @@
 #include "shellapi.h"
 #include "CmdLine.h"
 #include "VirtualDimension.h"
-#include "HookDLL.h"
+#include "Messages.h"
+#include <shlwapi.h>
 
 
 class CommandLineStartApp : public CommandLineOption {
 public:
-   CommandLineStartApp(char opcode, UINT resid): CommandLineOption(opcode, resid, required_argument)   {}
+   CommandLineStartApp(wchar_t opcode, UINT resid): CommandLineOption(opcode, resid, required_argument)   {}
    virtual void ParseOption(LPCTSTR arg);
 };
 
 class CommandLineSwitchDesktop : public CommandLineOption {
 public:
-   CommandLineSwitchDesktop(char opcode, UINT resid): CommandLineOption(opcode, resid, required_argument)   {}
+   CommandLineSwitchDesktop(wchar_t opcode, UINT resid): CommandLineOption(opcode, resid, required_argument)   {}
    virtual void ParseOption(LPCTSTR arg);
 };
 
 //CommandLineInt g_cmdLineTransp('t', 0, 0, 192, CommandLineOption::optional_argument);	//start the application with transparency enabled
 //CommandLineFlag g_cmdLineMinToTray('m', 0);												//start the application with MinToTray flag
-CommandLineInt g_cmdLineDesktop('d', 0, -1, -1, CommandLineOption::optional_argument);	//Desktop on which to start the application. default is current desktop
-CommandLineStartApp g_cmdLineStartApp('x', 0);											//Start an application
-CommandLineSwitchDesktop g_cmdLineSwitchDesk('s', 0);									//Switch current desktop
+CommandLineInt g_cmdLineDesktop(L'd', 0, -1, -1, CommandLineOption::optional_argument);	//Desktop on which to start the application. default is current desktop
+CommandLineStartApp g_cmdLineStartApp(L'x', 0);											//Start an application
+CommandLineSwitchDesktop g_cmdLineSwitchDesk(L's', 0);									//Switch current desktop
 
 void CommandLineStartApp::ParseOption(LPCTSTR arg)
 {
 	//start the specified application !!!
-	SHELLEXECUTEINFO info;
+	SHELLEXECUTEINFO info = {};
 	info.cbSize = sizeof(info);
 	info.fMask = SEE_MASK_NOCLOSEPROCESS|SEE_MASK_FLAG_DDEWAIT;
 	info.lpFile = arg;
@@ -54,13 +55,30 @@ void CommandLineStartApp::ParseOption(LPCTSTR arg)
 	info.lpParameters = NULL;
 	info.lpVerb = NULL;
 	info.nShow = SW_SHOW;
-	if (ShellExecuteEx(&info) && (int)info.hInstApp > 32 && info.hProcess)
+	if (ShellExecuteEx(&info) && info.hProcess)
 	{
-		HWND hWnd = vdWindow.FindWindow();
-		Sleep(500);	//give some time for the window to start...
+		HWND hWnd = VirtualDimension::FindWindow();
 		if (hWnd && g_cmdLineDesktop != -1)
-			//would look better to execute the window 'hidden' (minized...), then show it on the right desktop
-			PostMessage(hWnd, WM_VD_STARTONDESKTOP, (WPARAM)GetProcessId(info.hProcess), (LPARAM)g_cmdLineDesktop);
+		{
+			//Ask the running instance to move the windows of the program to the desktop
+			StartOnDesktopRequest request = {};
+			wchar_t path[MAX_PATH];
+			DWORD size = MAX_PATH;
+			COPYDATASTRUCT data;
+			DWORD_PTR result;
+
+			request.processId = GetProcessId(info.hProcess);
+			request.desktop = g_cmdLineDesktop;
+			if (QueryFullProcessImageNameW(info.hProcess, 0, path, &size))
+				lstrcpynW(request.program, PathFindFileNameW(path), MAX_PATH);
+			else
+				lstrcpynW(request.program, PathFindFileNameW(arg), MAX_PATH);
+
+			data.dwData = VD_COPYDATA_STARTONDESKTOP;
+			data.cbData = sizeof(request);
+			data.lpData = &request;
+			SendMessageTimeout(hWnd, WM_COPYDATA, 0, (LPARAM)&data, SMTO_ABORTIFHUNG, 5000, &result);
+		}
 		CloseHandle(info.hProcess);
 	}
 }
@@ -68,8 +86,8 @@ void CommandLineStartApp::ParseOption(LPCTSTR arg)
 void CommandLineSwitchDesktop::ParseOption(LPCTSTR arg)
 {
 	//switch to the specified desktop
-	int desk = strtol(arg, NULL, 0);
-	HWND hWnd = vdWindow.FindWindow();
+	int desk = wcstol(arg, NULL, 0);
+	HWND hWnd = VirtualDimension::FindWindow();
 	if (hWnd)
 	PostMessage(hWnd, WM_VD_SWITCHDESKTOP, 0, desk);
 }

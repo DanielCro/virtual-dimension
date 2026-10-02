@@ -18,16 +18,13 @@
  *
  */
 
-#ifndef __HOOKDLL_H__
-#define __HOOKDLL_H__
+#ifndef __MESSAGES_H__
+#define __MESSAGES_H__
 
-enum HookReturnCode
-{
-   HOOK_ERROR,
-   HOOK_OK,
-   HOOK_OK_REHOOK,
-};
-
+/** Command identifiers of the window context menu.
+ * All of them are >= WM_USER, which is how the menu handlers tell them apart
+ * from the main window commands.
+ */
 enum MenuItems
 {
    VDM_TOGGLEONTOP = WM_USER+1,
@@ -47,22 +44,30 @@ enum MenuItems
    VDM_KILL,
 
    VDM_PROPERTIES,
-
-   VDM_MOVETODESK,
 };
 
+/** Private messages of the main Virtual Dimension window.
+ * Some of them are also posted by a second instance of the program, to forward
+ * its command line to the running instance.
+ */
 enum VirtualDimensionMessages
 {
-   WM_VD_HOOK_MENU_COMMAND = WM_APP + 100,
-   WM_VD_PREPARE_HOOK_MENU,
-   WM_VD_CHECK_MIN_TO_TRAY,
-   WM_VD_MOUSEWARP,
-	WM_VD_WNDSIZEMOVE,
+   WM_VD_MOUSEWARP = WM_APP + 103,
 
-   WM_VD_STARTONDESKTOP,      /* an application should start on the specified desktop. wParam = processId lParam = deskopIdx */
-   WM_VD_SWITCHDESKTOP,       /* switch to some desktop. lParam = desktopIdx */
-
-   WM_VD_LANGUAGE = WM_APP + 0x1000,   /* WM_VD_LANGUAGE to WM_VD_LANGUAGE + 0x1000 is reserved for all language messages) */
+   WM_VD_STARTONDESKTOP = WM_APP + 105,   /* an application should start on the specified desktop. wParam = processId lParam = deskopIdx */
+   WM_VD_SWITCHDESKTOP,                   /* switch to some desktop. lParam = desktopIdx */
 };
 
-#endif /*__HOOKDLL_H__*/
+/** WM_COPYDATA request, sent by a second instance of the program: the windows of
+ * a program which has just been started should be displayed on some desktop.
+ */
+#define VD_COPYDATA_STARTONDESKTOP  0x56440001
+
+struct StartOnDesktopRequest
+{
+   DWORD processId;           ///< Process which has been started
+   int desktop;               ///< Index of the desktop
+   wchar_t program[MAX_PATH]; ///< File name of the program (packaged applications run in another process)
+};
+
+#endif /*__MESSAGES_H__*/

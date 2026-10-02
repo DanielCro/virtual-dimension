@@ -1,19 +1,19 @@
-/* 
-* Virtual Dimension -  a free, fast, and feature-full virtual desktop manager 
+/*
+* Virtual Dimension -  a free, fast, and feature-full virtual desktop manager
 * for the Microsoft Windows platform.
 * Copyright (C) 2003-2008 Francois Ferrand
 *
-* This program is free software; you can redistribute it and/or modify it under 
-* the terms of the GNU General Public License as published by the Free Software 
-* Foundation; either version 2 of the License, or (at your option) any later 
+* This program is free software; you can redistribute it and/or modify it under
+* the terms of the GNU General Public License as published by the Free Software
+* Foundation; either version 2 of the License, or (at your option) any later
 * version.
-* 
-* This program is distributed in the hope that it will be useful, but WITHOUT 
-* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+*
+* This program is distributed in the hope that it will be useful, but WITHOUT
+* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 *
-* You should have received a copy of the GNU General Public License along with 
-* this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+* You should have received a copy of the GNU General Public License along with
+* this program; if not, write to the Free Software Foundation, Inc., 59 Temple
 * Place, Suite 330, Boston, MA 02111-1307 USA
 *
 */
@@ -43,7 +43,7 @@ ApplicationListDlg::~ApplicationListDlg(void)
 
 int ApplicationListDlg::ShowDialog(HINSTANCE hinstance, HWND hWndParent)
 {
-   return ::DialogBoxParam(hinstance, MAKEINTRESOURCE(IDD_APPLLIST_DLG), hWndParent, &DlgProc, (LPARAM)this);
+   return (int)::DialogBoxParam(hinstance, MAKEINTRESOURCE(IDD_APPLLIST_DLG), hWndParent, &DlgProc, (LPARAM)this);
 }
 
 void ApplicationListDlg::InitDialog()
@@ -51,7 +51,7 @@ void ApplicationListDlg::InitDialog()
    LVCOLUMN column;
 
    //Create the image list
-   //Note: no need to destroy this list, as it will be destroyed automatically 
+   //Note: no need to destroy this list, as it will be destroyed automatically
    //when the list it is associated with is destroyed.
    m_hImgList = ImageList_Create(16, 16, ILC_COLOR32|ILC_MASK, 10, 5);
    m_defaultIconIdx = ImageList_AddIcon(m_hImgList, (HICON)LoadImage(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_DEFAPP_SMALL), IMAGE_ICON, 16, 16, LR_SHARED));
@@ -79,14 +79,14 @@ void ApplicationListDlg::InitDialog()
 
       if (m_values)
       {
-         m_hParamEditCtrl = CreateWindow("COMBOBOX", "", WS_BORDER|WS_CHILD|CBS_DROPDOWNLIST, 0, 0, 10, 10, m_hAppListWnd, NULL, GetModuleHandle(NULL), 0);
+         m_hParamEditCtrl = CreateWindow(WC_COMBOBOX, L"", WS_BORDER|WS_CHILD|CBS_DROPDOWNLIST, 0, 0, 10, 10, m_hAppListWnd, NULL, GetModuleHandle(NULL), 0);
 
          const LPCTSTR * val = m_values;
          while(*val)
             ComboBox_AddString(m_hParamEditCtrl, *val++);
       }
       else
-         m_hParamEditCtrl = CreateWindow("EDIT", "", WS_BORDER|WS_CHILD|ES_NUMBER|ES_AUTOHSCROLL, 0, 0, 0, 0, m_hAppListWnd, NULL, GetModuleHandle(NULL), 0);
+         m_hParamEditCtrl = CreateWindow(WC_EDIT, L"", WS_BORDER|WS_CHILD|ES_NUMBER|ES_AUTOHSCROLL, 0, 0, 0, 0, m_hAppListWnd, NULL, GetModuleHandle(NULL), 0);
 
       SetWindowFont(m_hParamEditCtrl, GetWindowFont(m_hDlg), FALSE);
    }
@@ -111,7 +111,7 @@ void ApplicationListDlg::OnInsertApplBtn()
    *path = 0;
 
    //Browse for a new program name
-   if (GetProgramName(path, MAX_PATH) && 
+   if (GetProgramName(path, MAX_PATH) &&
        (FindProgram(path)==-1 || (locMessageBox(m_hDlg, IDS_PROGRAMINLIST_ERROR, IDS_ERROR, MB_OK|MB_ICONEXCLAMATION), FALSE)))
       InsertProgram(path, m_defaultValue);
 }
@@ -135,7 +135,7 @@ void ApplicationListDlg::OnEditApplBtn()
    ListView_GetItemText(m_hAppListWnd, idx, 0, path, MAX_PATH);
 
    //Browse for a new program name
-   if (GetProgramName(path, MAX_PATH) && 
+   if (GetProgramName(path, MAX_PATH) &&
 		 (newidx = FindProgram(path), TRUE) &&
        (newidx==-1 || newidx==idx || (locMessageBox(m_hDlg, IDS_PROGRAMINLIST_ERROR, IDS_ERROR, MB_OK|MB_ICONEXCLAMATION), FALSE)))
       InsertProgram(path, m_defaultValue, idx);
@@ -157,7 +157,7 @@ void ApplicationListDlg::OnRemoveApplBtn()
 
 void ApplicationListDlg::BeginEdit(int item)
 {
-   char buf[6];
+   wchar_t buf[12];
    DWORD param = GetProgramParam(item);
 
    m_editedItemIndex = item;
@@ -166,7 +166,10 @@ void ApplicationListDlg::BeginEdit(int item)
    if (m_values)
       ComboBox_SetCurSel(m_hParamEditCtrl, param);
    else
-      SetWindowText(m_hParamEditCtrl, itoa(param, buf, 10));
+   {
+      _ultow_s(param, buf, 10);
+      SetWindowText(m_hParamEditCtrl, buf);
+   }
 
    //Display the window at the correct location
    RECT rect;
@@ -181,7 +184,7 @@ void ApplicationListDlg::BeginEdit(int item)
 void ApplicationListDlg::EndEdit()
 {
    DWORD param;
-   char buf[6];
+   wchar_t buf[12];
 
    if (m_values)
    {
@@ -189,8 +192,8 @@ void ApplicationListDlg::EndEdit()
    }
    else
    {
-      GetWindowText(m_hParamEditCtrl, buf, 6);
-      param = atoi(buf);
+      GetWindowText(m_hParamEditCtrl, buf, 12);
+      param = _wtoi(buf);
    }
 
    //Update the list
@@ -237,25 +240,24 @@ void ApplicationListDlg::OnApply()
    //Add/set value for all entries in the list box
    for(i=0; i<ListView_GetItemCount(m_hAppListWnd); i++)
    {
-      ListView_GetItemText(m_hAppListWnd, i, 0, filename, length);
+      ListView_GetItemText(m_hAppListWnd, i, 0, filename, MAX_PATH);
       m_appgroup->SaveDWord(filename, GetProgramParam(i));
    }
 }
 
 BOOL ApplicationListDlg::GetProgramName(LPTSTR filename, DWORD maxlen)
 {
-   OPENFILENAME ofn;
-
-	String filter;
+      OPENFILENAME ofn;
+   String filter;
 
    ZeroMemory(&ofn, sizeof(OPENFILENAME));
    ofn.lStructSize = sizeof(OPENFILENAME);
    ofn.hwndOwner = m_hDlg;
    ofn.lpstrFile = filename;
    ofn.nMaxFile = maxlen;
-	filter = Locale::GetInstance().GetString(IDS_PROGRAMFILTER);
-	filter.Replace('|', 0);	
-   ofn.lpstrFilter = filter;
+   filter = Locale::GetInstance().GetString(IDS_PROGRAMFILTER);
+   std::replace(filter.begin(), filter.end(), L'|', L'\0');
+   ofn.lpstrFilter = filter.c_str();
    ofn.nFilterIndex = 1;
    ofn.lpstrFileTitle = NULL;
    ofn.nMaxFileTitle = 0;
@@ -318,12 +320,17 @@ void ApplicationListDlg::SetProgramParam(int item, DWORD param)
    //Setup sub-item in the list
    if (m_values)
    {
-      ListView_SetItemText(m_hAppListWnd, item, 1, (LPTSTR)m_values[param]);
+      DWORD count = 0;
+      while(m_values[count])
+         count++;
+      if (param >= count)
+         param = 0;
+      ListView_SetItemText(m_hAppListWnd, item, 1, (LPWSTR)m_values[param]);
    }
    else if (m_valTitle) //else, this is not needed, as the data will not be shown/changed anyway
    {
-      char buf[6];
-      itoa(param, buf, 10);
+      wchar_t buf[12];
+      _ultow_s(param, buf, 10);
       ListView_SetItemText(m_hAppListWnd, item, 1, buf);
    }
 }
@@ -337,7 +344,7 @@ DWORD ApplicationListDlg::GetProgramParam(int item)
    lvitem.iSubItem = 0;
    ListView_GetItem(m_hAppListWnd, &lvitem);
 
-   return lvitem.lParam;
+   return (DWORD)lvitem.lParam;
 }
 
 INT_PTR CALLBACK ApplicationListDlg::DlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)

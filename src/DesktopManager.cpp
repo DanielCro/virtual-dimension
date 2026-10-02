@@ -29,7 +29,9 @@
 #include "DesktopManager.h"
 #include <Commdlg.h>
 #include "WindowsManager.h"
-#include "HookDLL.h"
+#include "Messages.h"
+#include "Locale.h"
+#include "PlatformHelper.h"
 
 DesktopManager * deskMan;
 
@@ -52,7 +54,8 @@ DesktopManager::DesktopManager(int width, int height)
    SetDisplayMode((DisplayMode)settings.LoadSetting(Settings::DisplayMode));
 
    settings.LoadSetting(Settings::PreviewWindowFont, &m_lfPreviewWindowFontInfo);
-   m_hPreviewWindowFont = CreateFontIndirect(&m_lfPreviewWindowFontInfo);
+   m_hPreviewWindowFont = NULL;
+   UpdatePreviewWindowFont();
    m_crPreviewWindowFontColor = settings.LoadSetting(Settings::PreviewWindowFontColor);
 
    //Load the desktops
@@ -63,7 +66,6 @@ DesktopManager::DesktopManager(int width, int height)
    m_useOSD = settings.LoadSetting(Settings::DesktopNameOSD);
 
    vdWindow.SetMessageHandler(WM_VD_SWITCHDESKTOP, this, &DesktopManager::OnCmdSwitchDesktop);
-   vdWindow.SetMessageHandler(WM_SETTINGCHANGE, this, &DesktopManager::OnSettingsChange);
 }
 
 DesktopManager::~DesktopManager(void)
@@ -122,7 +124,7 @@ void DesktopManager::UpdateLayout()
    if (m_desks.size() == 0)
       return;
 
-   deltaX = m_width / min(m_nbColumn, (int)m_desks.size());
+   deltaX = m_width / std::min(m_nbColumn, (int)m_desks.size());
    deltaY = m_height / (((int)m_desks.size()+m_nbColumn-1) / m_nbColumn);
 
    m_bkDisplayMode->ReSize(deltaX, deltaY);
@@ -301,8 +303,10 @@ Desktop* DesktopManager::GetDesktopFromPoint(int X, int Y)
    if (m_desks.size() == 0 || m_width == 0 || m_height == 0)
       return NULL;
 
-   deltaX = m_width / min(m_nbColumn, (int)m_desks.size());
+   deltaX = m_width / std::min(m_nbColumn, (int)m_desks.size());
    deltaY = m_height / (((int)m_desks.size()+m_nbColumn-1) / m_nbColumn);
+   if (deltaX <= 0 || deltaY <= 0 || X < 0 || Y < 0 || X / deltaX >= m_nbColumn)
+      return NULL;
 
    index = (X / deltaX) + m_nbColumn * (Y / deltaY);
 
@@ -385,7 +389,7 @@ Desktop* DesktopManager::GetOtherDesk(Desktop * desk, int (DesktopManager::*updp
    if (it == m_desks.end())
       return desk;
 
-   pos = (this->*updpos)(distance(m_desks.begin(), it), param);
+   pos = (this->*updpos)((int)distance(m_desks.begin(), it), param);
 
    while(pos < 0)
       pos += GetNbDesktops();
@@ -426,7 +430,7 @@ void DesktopManager::SetDisplayMode(DisplayMode dm)
 
    if (m_desks.size())
    {
-      int deltaX = m_width / min(m_nbColumn, (int)m_desks.size());
+      int deltaX = m_width / std::min(m_nbColumn, (int)m_desks.size());
       int deltaY = m_height / (((int)m_desks.size()+m_nbColumn-1) / m_nbColumn);
       m_bkDisplayMode->ReSize(deltaX, deltaY);
    }
@@ -448,33 +452,50 @@ bool DesktopManager::ChooseBackgroundDisplayModeOptions(HWND hWnd)
 void DesktopManager::ChoosePreviewWindowFont(HWND hDlg)
 {
    CHOOSEFONT cf;
+   LOGFONT lf = m_lfPreviewWindowFontInfo;
+   UINT dpi = GetDpiForSystem();
+
+   //The font dialog works with the actual screen resolution
+   lf.lfHeight = MulDiv(lf.lfHeight, dpi, USER_DEFAULT_SCREEN_DPI);
 
    cf.lStructSize = sizeof(CHOOSEFONT);
    cf.hwndOwner = hDlg;
    cf.hDC = (HDC)NULL;
-   cf.lpLogFont = &m_lfPreviewWindowFontInfo;
+   cf.lpLogFont = &lf;
    cf.iPointSize = 0;
    cf.Flags = CF_SCREENFONTS | CF_EFFECTS | CF_FORCEFONTEXIST | CF_INITTOLOGFONTSTRUCT;
    cf.rgbColors = m_crPreviewWindowFontColor;
    cf.lCustData = 0;
    cf.lpfnHook = (LPCFHOOKPROC)NULL;
-   cf.lpTemplateName = (LPSTR)NULL;
+   cf.lpTemplateName = NULL;
    cf.hInstance = (HINSTANCE)vdWindow;
-   cf.lpszStyle = (LPSTR)NULL;
+   cf.lpszStyle = NULL;
    cf.nFontType = SCREEN_FONTTYPE;
    cf.nSizeMin = 0;
    cf.nSizeMax = 0;
 
    if (ChooseFont(&cf))
    {
-      if (m_hPreviewWindowFont)
-         DeleteObject(m_hPreviewWindowFont);
-
-      m_hPreviewWindowFont = CreateFontIndirect(cf.lpLogFont);
+      m_lfPreviewWindowFontInfo = lf;
+      m_lfPreviewWindowFontInfo.lfHeight = MulDiv(lf.lfHeight, USER_DEFAULT_SCREEN_DPI, dpi);
       m_crPreviewWindowFontColor = cf.rgbColors;
-
-      vdWindow.Refresh();
+      UpdatePreviewWindowFont();
    }
+}
+
+/** (Re)create the font of the preview window, for the DPI of the window. */
+void DesktopManager::UpdatePreviewWindowFont()
+{
+   LOGFONT lf = m_lfPreviewWindowFontInfo;
+
+   if (m_hPreviewWindowFont)
+      DeleteObject(m_hPreviewWindowFont);
+
+   //The font size is expressed for 96 DPI
+   lf.lfHeight = PlatformHelper::ScaleForWindow(vdWindow, lf.lfHeight);
+   m_hPreviewWindowFont = CreateFontIndirect(&lf);
+
+   vdWindow.Refresh();
 }
 
 int DesktopManager::DeltaMod(int pos, int param)
@@ -540,24 +561,20 @@ int DesktopManager::BottomMod(int pos, int /*param*/)
 
 LRESULT DesktopManager::OnCmdSwitchDesktop(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM lParam)
 {
-	Desktop * desk = GetDesktop(lParam);
+	Desktop * desk = GetDesktop((int)lParam);
 	if (desk)
 		SwitchToDesktop(desk);
 	else
-		MessageBox(NULL, "No such desktop", "Error", MB_OK|MB_ICONERROR);
+		locMessageBox(NULL, IDS_NO_SUCH_DESKTOP, IDS_ERROR, MB_OK|MB_ICONERROR);
 	return 0;
 }
 
-LRESULT DesktopManager::OnSettingsChange(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
+LRESULT DesktopManager::OnSettingsChange(HWND /*hWnd*/, UINT /*message*/, WPARAM wParam, LPARAM /*lParam*/)
 {
-	WallPaper::RefreshDefaultWallpaper();
+	//The wallpaper of Windows may have been changed by the user
+	if (wParam == SPI_SETDESKWALLPAPER)
+		WallPaper::RefreshDefaultWallpaper();
 
-	LPCTSTR wallpaper;
-	wallpaper = m_currentDesktop ? Desktop::FormatWallpaper(m_currentDesktop->GetWallpaper()) : "";
-	if (wallpaper == NULL || *wallpaper != 0)	//if wallpaper is not set to 'default', ie use windows wallpaper
-		m_currentDesktop->SetWallpaper(WallPaper::GetDefaultWallpaper());
-
-	//TODO: also color may change...
 	return 0;
 }
 

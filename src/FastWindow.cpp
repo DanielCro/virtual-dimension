@@ -1,24 +1,24 @@
-/* 
+/*
  * Fast Window - A fast and convenient message dispatching window procedure.
  * Copyright (C) 2003-2008 Francois Ferrand
  *
- * This program is free software; you can redistribute it and/or modify it under 
- * the terms of the GNU General Public License as published by the Free Software 
- * Foundation; either version 2 of the License, or (at your option) any later 
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later
  * version.
- * 
- * This program is distributed in the hope that it will be useful, but WITHOUT 
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
  * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along with 
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
  * Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
- 
+
 #include "StdAfx.h"
-#include "fastwindow.h"
+#include "FastWindow.h"
 
 FastWindow::FastWindow()
 {
@@ -28,7 +28,7 @@ FastWindow::FastWindow()
 
 FastWindow::~FastWindow(void)
 {
-   if (IsWindow(m_hWnd)) 
+   if (IsWindow(m_hWnd))
       DestroyWindow(m_hWnd);
 
    m_commandMap.clear();
@@ -37,27 +37,27 @@ FastWindow::~FastWindow(void)
    m_syscommandMap.clear();
 }
 
-HWND FastWindow::Create( LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle, int x, int y, 
+HWND FastWindow::Create( LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle, int x, int y,
                          int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance)
-{ 
+{
    if (IsValid())
       return NULL;
 
-   m_hWnd = ::CreateWindow( lpClassName, lpWindowName, dwStyle, x, y, nWidth, nHeight, 
+   m_hWnd = ::CreateWindow( lpClassName, lpWindowName, dwStyle, x, y, nWidth, nHeight,
                             hWndParent, hMenu, hInstance, this);
 
    return m_hWnd;
 }
 
-HWND FastWindow::Create( DWORD dwStyleEx, LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle, 
-                         int x, int y, int nWidth, int nHeight, 
+HWND FastWindow::Create( DWORD dwStyleEx, LPCTSTR lpClassName, LPCTSTR lpWindowName, DWORD dwStyle,
+                         int x, int y, int nWidth, int nHeight,
                          HWND hWndParent, HMENU hMenu, HINSTANCE hInstance)
 {
    if (IsValid())
       return NULL;
 
-   m_hWnd = ::CreateWindowEx( dwStyleEx, lpClassName, lpWindowName, dwStyle, x, y, 
-                              nWidth, nHeight, hWndParent, hMenu, hInstance, this); 
+   m_hWnd = ::CreateWindowEx( dwStyleEx, lpClassName, lpWindowName, dwStyle, x, y,
+                              nWidth, nHeight, hWndParent, hMenu, hInstance, this);
 
    return m_hWnd;
 }
@@ -115,7 +115,7 @@ LRESULT CALLBACK FastWindow::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPA
 LRESULT FastWindow::CommandHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam)
 {
    MessageMap::iterator it;
-   it = m_commandMap.find(wParam);
+   it = m_commandMap.find(LOWORD(wParam));   //HIWORD is the notification code (1 for accelerators)
    if (it == m_commandMap.end())
       return DefWindowProc(hWnd, code, wParam, lParam);
    else
@@ -125,7 +125,9 @@ LRESULT FastWindow::CommandHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM l
 LRESULT FastWindow::SysCommandHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam)
 {
    MessageMap::iterator it;
-   it = m_syscommandMap.find(wParam);
+   it = m_syscommandMap.find((UINT)wParam);
+   if (it == m_syscommandMap.end() && wParam >= 0xF000)
+      it = m_syscommandMap.find((UINT)(wParam & 0xFFF0));   //the four low-order bits of SC_xxx are used internally by Windows
    if (it == m_syscommandMap.end())
       return DefWindowProc(hWnd, code, wParam, lParam);
    else
@@ -135,7 +137,7 @@ LRESULT FastWindow::SysCommandHandler(HWND hWnd, UINT code, WPARAM wParam, LPARA
 LRESULT FastWindow::NotifyHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam)
 {
    MessageMap::iterator it;
-   it = m_notifyMap.find(wParam);
+   it = m_notifyMap.find((UINT)wParam);
    if (it == m_notifyMap.end())
       return DefWindowProc(hWnd, code, wParam, lParam);
    else
@@ -145,7 +147,7 @@ LRESULT FastWindow::NotifyHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lP
 LRESULT FastWindow::TimersHandler(HWND hWnd, UINT code, WPARAM wParam, LPARAM lParam)
 {
    MessageMap::iterator it;
-   it = m_timersMap.find(wParam);
+   it = m_timersMap.find((UINT)wParam);
    if (it == m_timersMap.end())
       return DefWindowProc(hWnd, code, wParam, lParam);
    else

@@ -1,0 +1,19 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": true,
+  "cmake.buildDirectory": "${workspaceFolder}/build/${presetName}",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.cppStandard": "c++20",
+  "files.associations": {
+    "*.rc": "c",
+    "*.manifest": "xml"
+  },
+  "files.exclude": {
+    "cvs-archive": true
+  },
+  "search.exclude": {
+    "build": true,
+    "out": true,
+    "cvs-archive": true
+  }
+}
