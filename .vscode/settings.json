@@ -8,12 +8,8 @@
     "*.rc": "c",
     "*.manifest": "xml"
   },
-  "files.exclude": {
-    "cvs-archive": true
-  },
   "search.exclude": {
     "build": true,
-    "out": true,
-    "cvs-archive": true
+    "out": true
   }
 }

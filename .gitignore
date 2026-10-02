@@ -2,8 +2,6 @@
 /build/
 /out/
 
-# Original CVS repository (history is imported into git)
-/cvs-archive/
 
 # IDE / tooling
 .vs/
