@@ -109,3 +109,9 @@ repository; the release tags `RELEASE_0_94`, `RELEASE_0_94_BETA1` and
 ## License
 
 GNU General Public License, version 2 or later. See [LICENSE](LICENSE).
+
+- Original program © 2003–2008 Francois Ferrand.
+- 64-bit Windows 10/11 port © 2026 Daniel Filkovic ([@DanielCro](https://github.com/DanielCro)).
+
+This port was made with heavy use of an AI coding agent (Anthropic's Claude), which did the
+investigation, the porting and the fixes under the maintainer's direction and review.
