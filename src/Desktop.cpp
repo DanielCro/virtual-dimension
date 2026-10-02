@@ -199,7 +199,10 @@ void Desktop::Draw(HDC hDc)
    //Draw a frame around the desktop
    FrameRect(hDc, &m_rect, (HBRUSH)GetStockObject(BLACK_BRUSH));
 
-   //Draw icons for each window
+   //Draw icons for each window, clipped to the desktop (when there are more windows than room)
+   int savedDC = SaveDC(hDc);
+   IntersectClipRect(hDc, m_rect.left, m_rect.top, m_rect.right, m_rect.bottom);
+
    WindowsManager::Iterator it;
    list<Window*> obsoleteWindowsList;
    int iconSize = vdWindow.GetIconSize();
@@ -234,6 +237,8 @@ void Desktop::Draw(HDC hDc)
          y += iconSize;
       }
    }
+
+   RestoreDC(hDc, savedDC);
 
    //Remove windows flagged as obsolete
    for(list<Window*>::iterator i = obsoleteWindowsList.begin();

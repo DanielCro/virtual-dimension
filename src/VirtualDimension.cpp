@@ -196,6 +196,7 @@ bool VirtualDimension::Start(HINSTANCE hInstance, int nCmdShow)
    SetMessageHandler(WM_MOUSEHOVER, this, &VirtualDimension::OnMouseHover);
    SetMessageHandler(WM_MOUSELEAVE, this, &VirtualDimension::OnMouseLeave);
    SetMessageHandler(WM_NCHITTEST, this, &VirtualDimension::OnNCHitTest);
+   SetMessageHandler(WM_ERASEBKGND, this, &VirtualDimension::OnEraseBackground);
 
    // compare the window's style
    m_hasCaption = settings.LoadSetting(Settings::HasCaption);
@@ -336,7 +337,37 @@ void VirtualDimension::LockPreviewWindow(bool lock)
       InsertMenu(m_pSysMenu, 0, MF_BYPOSITION, SC_SIZE, Locale::GetInstance().GetString(IDS_MENU_SIZE)); // "&Size"
       InsertMenu(m_pSysMenu, 0, MF_BYPOSITION, SC_MOVE, Locale::GetInstance().GetString(IDS_MENU_MOVE)); // "&Move"
    }
+   ApplyFrameStyle(style);
+}
+
+/** Change the frame of the window (caption, sizing border), keeping the client area
+ * (ie, the preview) at the same place and with the same size.
+ */
+void VirtualDimension::ApplyFrameStyle(LONG_PTR style)
+{
+   RECT rect;
+
+   //While shrinked, the window has no frame at all: the style is applied by UnShrink()
+   if (m_shrinked || !IsValid())
+      return;
+
+   //Client area, in screen coordinates
+   GetClientRect(m_hWnd, &rect);
+   MapWindowPoints(m_hWnd, NULL, (LPPOINT)&rect, 2);
+
    SetWindowLongPtr(m_hWnd, GWL_STYLE, style);
+
+   //Window rectangle needed for that client area with the new frame
+   AdjustWindowRectExForDpi(&rect, (DWORD)style, FALSE, (DWORD)GetWindowLongPtr(m_hWnd, GWL_EXSTYLE),
+                            GetDpiForWindow(m_hWnd));
+
+   //A window docked to the screen borders stays docked (else the caption may go off-screen)
+   DockWindow(rect);
+
+   //Let the system recompute the frame (SWP_FRAMECHANGED), then repaint everything
+   SetWindowPos(m_hWnd, NULL, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+   RedrawWindow(m_hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 void VirtualDimension::ShowCaption(bool caption)
@@ -358,8 +389,7 @@ void VirtualDimension::ShowCaption(bool caption)
       style &= ~WS_CAPTION;
       style |= WS_DLGFRAME;
    }
-   SetWindowLongPtr(m_hWnd, GWL_STYLE, style);
-   SetWindowPos(m_hWnd, NULL, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
+   ApplyFrameStyle(style);
 }
 
 ATOM VirtualDimension::RegisterClass()
@@ -974,10 +1004,20 @@ LRESULT VirtualDimension::OnPaint(HWND hWnd, UINT /*message*/, WPARAM /*wParam*/
 
 LRESULT VirtualDimension::OnSize(HWND /*hWnd*/, UINT /*message*/, WPARAM wParam, LPARAM lParam)
 {
-   if ((!m_shrinked) && (wParam == SIZE_RESTORED))
+   //Follow every size change (including while the border is being dragged)
+   if ((!m_shrinked) && (wParam != SIZE_MINIMIZED))
+   {
       deskMan->ReSize(LOWORD(lParam), HIWORD(lParam));
+      Refresh();
+   }
 
    return 0;
+}
+
+LRESULT VirtualDimension::OnEraseBackground(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
+{
+   //The whole client area is painted by WM_PAINT (double buffered): erasing it first would only flicker
+   return TRUE;
 }
 
 LRESULT VirtualDimension::OnMouseHover(HWND /*hWnd*/, UINT /*message*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
@@ -1097,6 +1137,7 @@ void VirtualDimension::Shrink(void)
 
    //Apply the changes
    SetWindowPos(m_hWnd, NULL, pos.left, pos.top, pos.right-pos.left, pos.bottom-pos.top, SWP_NOZORDER | SWP_FRAMECHANGED);
+   RedrawWindow(m_hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 
    //Disable tooltips
    tooltip->ShowTooltips(false);
@@ -1138,6 +1179,7 @@ void VirtualDimension::UnShrink(void)
 
    //Apply the changes
    SetWindowPos(m_hWnd, NULL, pos.left, pos.top, pos.right-pos.left, pos.bottom-pos.top, SWP_DRAWFRAME | SWP_NOZORDER | SWP_FRAMECHANGED);
+   RedrawWindow(m_hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 
    //Enable tooltips
    tooltip->ShowTooltips(true);

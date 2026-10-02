@@ -169,21 +169,24 @@ LRESULT DesktopManager::OnPaint(HWND hWnd, UINT /*message*/, WPARAM /*wParam*/, 
    //Start drawing
    hdc = BeginPaint(hWnd, &ps);
 
-   //Create the DC used for drawing
+   //Paint the whole client area (it may not have the size of the layout yet, eg while
+   //the frame of the window is being changed): no stale pixels may remain.
+   GetClientRect(hWnd, &rect);
+   rect.right = std::max(rect.right, (LONG)m_width);
+   rect.bottom = std::max(rect.bottom, (LONG)m_height);
+
+   //Create the DC used for drawing (double buffering)
    deskHdc = CreateCompatibleDC(hdc);
-   deskBmp = CreateCompatibleBitmap(hdc, m_width, m_height);
-   SelectObject(deskHdc, deskBmp);
+   deskBmp = CreateCompatibleBitmap(hdc, std::max(rect.right, 1L), std::max(rect.bottom, 1L));
+   HGDIOBJ oldBmp = SelectObject(deskHdc, deskBmp);
 
    //Draw the background
-   rect.left = rect.top = 0;
-   rect.bottom = m_height;
-   rect.right = m_width;
    FillRect(deskHdc, &rect, GetSysColorBrush(COLOR_WINDOW));
 
    m_bkDisplayMode->BeginPainting(deskHdc);
 
    //Draw the desktops
-   SelectObject(deskHdc, GetPreviewWindowFont());
+   HGDIOBJ oldFont = SelectObject(deskHdc, GetPreviewWindowFont());
    SetTextColor(deskHdc, GetPreviewWindowFontColor());
    for(it = m_desks.begin(); it != m_desks.end(); it ++)
    {
@@ -200,12 +203,14 @@ LRESULT DesktopManager::OnPaint(HWND hWnd, UINT /*message*/, WPARAM /*wParam*/, 
    m_bkDisplayMode->EndPainting(deskHdc);
 
    //Copy the resulting image to the actual DC
-   BitBlt(hdc, 0, 0, m_width, m_height, deskHdc, 0, 0, SRCCOPY);
+   BitBlt(hdc, 0, 0, rect.right, rect.bottom, deskHdc, 0, 0, SRCCOPY);
 
    //Drawing done !
    EndPaint(hWnd, &ps);
 
    //Cleanup
+   SelectObject(deskHdc, oldFont);
+   SelectObject(deskHdc, oldBmp);
    DeleteDC(deskHdc);
    DeleteObject(deskBmp);
 

@@ -107,6 +107,7 @@ protected:
 
    bool HasCaption() const                { return m_hasCaption; }
    void ShowCaption(bool caption);
+   void ApplyFrameStyle(LONG_PTR style);
 
    ATOM RegisterClass();
    void UpdateIconSize();
@@ -146,6 +147,7 @@ protected:
 
    LRESULT OnPaint(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
    LRESULT OnSize(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+   LRESULT OnEraseBackground(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
    static INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 };
